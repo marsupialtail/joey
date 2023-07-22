@@ -5,9 +5,6 @@ from collections import namedtuple
 from tqdm import tqdm
 import time
 
-con = duckdb.connect()
-con = con.execute("PRAGMA threads=8")
-
 def plot_candlesticks(prices):
     import matplotlib.pyplot as plt
     prices = prices.to_pandas()
@@ -57,6 +54,7 @@ def replace_with_dict(string, d):
 
 def preprocess_conditions(events):
     touched_columns = set()
+    event_required_columns = {}
     prefilter = sqlglot.exp.FALSE
     seen_events = set()
     event_prefilters = {}
@@ -68,10 +66,9 @@ def preprocess_conditions(events):
     
     # we need this for the selection of the range join.
     for i in range(len(events)):
-        event = events[i]
         event_prefilter = sqlglot.exp.TRUE
         event_dependent_filter = sqlglot.exp.TRUE
-        event_name, event_filter = event
+        event_name, event_filter = events[i]
 
         if i != 0:
             assert event_filter is not None and event_filter != sqlglot.exp.TRUE, "only the first event can have no filter"
@@ -81,8 +78,10 @@ def preprocess_conditions(events):
             event_filter = sqlglot.parse_one(event_filter)
             conjuncts = list(event_filter.flatten() if isinstance(event_filter, sqlglot.exp.And) else [event_filter])
             for conjunct in conjuncts:
-                conjunct_dependencies = set(i.table for i in conjunct.find_all(sqlglot.expressions.Column))
-                conjunct_columns = set(i.name for i in conjunct.find_all(sqlglot.expressions.Column))
+
+                all_columns = list(conjunct.find_all(sqlglot.expressions.Column))
+                conjunct_dependencies = set(i.table for i in all_columns)
+                conjunct_columns = set(i.name for i in all_columns)
                 touched_columns = touched_columns.union(conjunct_columns)
                 assert '' not in conjunct_dependencies, "must specify the table name in columns, like a.x instead of x"
                 assert conjunct_dependencies.issubset(seen_events.union({event_name})), "an event can only depend on itself or prior events"
@@ -93,10 +92,15 @@ def preprocess_conditions(events):
                     event_prefilter = sqlglot.exp.and_(event_prefilter, conjunct)
                 else:
                     event_dependent_filter = sqlglot.exp.and_(event_dependent_filter, conjunct)
+                    
                     if len(conjunct_dependencies) == 1 and list(conjunct_dependencies)[0] == events[0][0]:
                         if i == len(events) - 1:
                             last_event_dependent_on_first_event_filter = sqlglot.exp.and_(
                                 last_event_dependent_on_first_event_filter, conjunct)
+                
+                for i in all_columns:
+                    if i.table != event_name:
+                        event_required_columns[i.table] = event_required_columns.get(i.table, set()).union({i.name})
                     
         event_prefilter = optimizer.simplify.simplify(event_prefilter)
         event_prefilters[event_name] = event_prefilter.sql()
@@ -112,7 +116,8 @@ def preprocess_conditions(events):
     print(touched_columns)
     print(event_prefilters)
     print(event_dependent_filters)
-    return prefilter, touched_columns, event_prefilters, event_dependent_filters
+    print(event_required_columns)
+    return prefilter, touched_columns, event_prefilters, event_dependent_filters, event_required_columns
 
 def nfa_cep(batch, events, time_col, max_span):
     
@@ -120,9 +125,15 @@ def nfa_cep(batch, events, time_col, max_span):
     assert batch[time_col].is_sorted(), "batch must be sorted by time_col"
 
     event_names = [event for event, predicate in events]
-    prefilter, touched_columns, event_prefilters, event_predicates = preprocess_conditions(events)
-    if prefilter != "TRUE":
-        batch = polars.SQLContext(frame=batch).execute("select {} from frame where {}".format(",".join(touched_columns.union({time_col})), prefilter)).collect()
+    prefilter, touched_columns, event_prefilters, event_predicates, event_required_columns = preprocess_conditions(events)
+
+    for event in event_names:
+        if event not in event_required_columns:
+            event_required_columns[event] = {time_col}
+        else:
+            event_required_columns[event].add(time_col)
+
+    batch = polars.SQLContext(frame=batch).execute("select {} from frame where {}".format(",".join(touched_columns.union({time_col})), prefilter)).collect()
 
     batch = batch.with_row_count("__row_count__")
 
@@ -144,7 +155,7 @@ def nfa_cep(batch, events, time_col, max_span):
 
     # sequences = polars.from_dicts([{"seq_id": 0, "start_time": batch[time_col][0]}])
     matched_sequences = {i: None for i in range(total_events)}
-    matched_sequences[0] = batch[0].rename(rename_dicts[event_names[0]])
+    matched_sequences[0] = batch[0].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
     
     event_indices = {event_name: None for event_name in event_names}
     for event_name in event_names:
@@ -153,10 +164,17 @@ def nfa_cep(batch, events, time_col, max_span):
                                                             format(event_name, event_prefilters[event_name])).collect()["__row_count__"])
         else:
             event_indices[event_name] = None
+    
+    total_filter_time = 0
+    total_other_time = 0
 
     for row in tqdm(range(total_len)):
         current_time = batch[time_col][row]
         this_row_can_be = [i for i in range(1, total_events) if event_indices[event_names[i]] is None or row in event_indices[event_names[i]]]
+        
+        # if row % 1000 == 0:
+        #     print(total_filter_time, total_other_time)
+        
         for seq_len in this_row_can_be:
             
             predicate = event_predicates[seq_len]
@@ -168,9 +186,10 @@ def nfa_cep(batch, events, time_col, max_span):
 
             # evaluate the predicate against matched_sequences[seq_len - 1]
             if matched_sequences[seq_len - 1] is not None and len(matched_sequences[seq_len - 1]) > 0:
-                # print(matched_sequences)         
+                # print(matched_sequences)      
+                start = time.time()
                 matched_sequences[seq_len - 1] = matched_sequences[seq_len - 1].filter(polars.col(event_names[seq_len - 1] + "_" + time_col) >= current_time - max_span)
-                # matched_sequences[seq_len - 1] = matched_sequences[seq_len - 1].filter(polars.col(event_names[0] + "_" + time_col) >= current_time - max_span)
+                total_filter_time += time.time() - start
 
                 # print("{}".format(predicate))
                 start = time.time()           
@@ -180,20 +199,19 @@ def nfa_cep(batch, events, time_col, max_span):
 
                 # now horizontally concatenate your table against the matched
                 if len(matched) > 0:
-                    matched = matched.hstack(repeat_row(batch[row].rename(rename_dicts[event_names[seq_len]]), len(matched)))
+                    matched = matched.hstack(repeat_row(batch[row].rename(rename_dicts[event_names[seq_len]])
+                                                        .select([event_names[seq_len] + "_" + k for k in event_required_columns[event_names[seq_len]]]), len(matched)))
                     if matched_sequences[seq_len] is None:
                         matched_sequences[seq_len] = matched
                     else:
-                        # if seq_len == 5:
-                        #     print("select * from frame where {}".format(predicate))
-                        #     print(matched.select(["a_close", "b_close", "c_close", "d_close", "e_close", "f_close", "a_timestamp", "f_timestamp"]))
                         matched_sequences[seq_len].vstack(matched, in_place=True)
+                total_other_time += time.time() - start
         
         if event_indices[event_names[0]] is None:
-            matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]), in_place=True)
+            matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
         else:
             if row in event_indices[event_names[0]]:
-                matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]), in_place=True)
+                matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
     
     if matched_sequences[total_events - 1] is None:
         return None
@@ -251,11 +269,11 @@ heads_and_shoulders_conditions = [('a', "a.is_local_top"), # first shoulder
 
 # # plot_candlesticks(original_qqq)
 
-# ascending_triangles = nfa_cep(qqq, ascending_triangles_conditions , "timestamp", 60 * 120)
-# print(ascending_triangles.unique("a___row_count__"))
+ascending_triangles = nfa_cep(qqq, ascending_triangles_conditions , "timestamp", 60 * 120)
+print(ascending_triangles.unique("a_timestamp"))
 
 # heads_and_shoulders = nfa_cep(qqq, heads_and_shoulders_conditions , "timestamp", 60 * 120)
 # print(heads_and_shoulders.unique("a___row_count__"))
 
-v_shape = nfa_cep(qqq, v_conditions , "timestamp", 60 * 100)
-print(v_shape.unique("a___row_count__"))
+# v_shape = nfa_cep(qqq, v_conditions , "timestamp", 60 * 100)
+# print(v_shape.unique("a___row_count__"))
