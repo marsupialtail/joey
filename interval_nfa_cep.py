@@ -22,9 +22,13 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None):
 
     partitioned = batch.partition_by(by) if by is not None else [batch]
 
-    for batch in partitioned:
+    for batch in partitioned if by is None else tqdm(partitioned):
 
-        for start_row in tqdm(sorted(event_indices[event_names[0]])):
+        for start_row in tqdm(range(len(batch))) if by is None else range(len(batch)):
+            global_row_count = batch["__row_count__"][start_row]
+            if global_row_count not in event_indices[event_names[0]]:
+                continue
+
             counter += 1
             start_time = batch[start_row][time_col]
             end_time = start_time + max_span
@@ -63,6 +67,9 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None):
                                 matched_sequences[seq_len].vstack(matched, in_place=True)
             
             if matched_sequences[total_events - 1] is not None:
-                end_results.append(matched_sequences[total_events - 1])
-    
+                if by is None:
+                    end_results.append(matched_sequences[total_events - 1])
+                else:
+                    end_results.append(matched_sequences[total_events - 1].with_columns(polars.lit(batch[by][start_row]).alias(by)))
+
     return polars.concat(end_results)

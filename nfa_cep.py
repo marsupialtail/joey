@@ -18,7 +18,9 @@ def nfa_cep(batch, events, time_col, max_span, by = None):
 
     results = []
 
-    for batch in tqdm(partitioned):
+    for batch in tqdm(partitioned) if by is not None else partitioned:
+
+        assert batch[time_col].is_sorted()
 
         matched_sequences = {i: None for i in range(total_events)}
         matched_sequences[0] = batch[0].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
@@ -65,10 +67,14 @@ def nfa_cep(batch, events, time_col, max_span, by = None):
             if event_indices[event_names[0]] is None:
                 matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
             else:
-                if row in event_indices[event_names[0]]:
+                if global_row_count in event_indices[event_names[0]]:
                     matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
         
         if matched_sequences[total_events - 1] is not None:
-            results.append(matched_sequences[total_events - 1].filter(polars.col(event_names[-1] + "_" + time_col) - polars.col(event_names[0] + "_" + time_col) <= max_span))
-
+            if by is not None:
+                key = batch[by][0]
+                results.append(matched_sequences[total_events - 1].filter(polars.col(event_names[-1] + "_" + time_col) - polars.col(event_names[0] + "_" + time_col) <= max_span).with_columns(polars.lit(key).alias(by)))
+            else:
+                results.append(matched_sequences[total_events - 1].filter(polars.col(event_names[-1] + "_" + time_col) - polars.col(event_names[0] + "_" + time_col) <= max_span))
+    
     return polars.concat(results)

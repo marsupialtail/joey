@@ -41,7 +41,6 @@ daily_qqq = daily_qqq.groupby_rolling("row_count", period = "10i", offset = "-5i
     .with_columns([(polars.col("close") == polars.col("min_close")).alias("is_local_bottom"),
                   (polars.col("close") == polars.col("max_close")).alias("is_local_top")])
 daily_qqq = daily_qqq.rename({"row_count": "timestamp"})
-print(daily_qqq)
 
 v_conditions = [
     ('a', "a.is_local_top"),
@@ -78,8 +77,9 @@ cup_and_handle_conditions = [
 # ascending_triangles = nfa_cep(qqq, ascending_triangles_conditions , "timestamp", 60 * 120)
 # print(ascending_triangles.unique("a_timestamp"))
 
-ascending_triangles = nfa_cep(daily_qqq, cup_and_handle_conditions , "timestamp", 30, by = "symbol")
-print(ascending_triangles.unique("a_timestamp"))
+cup_and_handles = nfa_cep(daily_qqq, cup_and_handle_conditions , "timestamp", 30, by = "symbol")
+print(cup_and_handles.unique(["a_timestamp", "symbol"]))
+cup_and_handles.write_parquet("cup_and_handles.parquet")
 
 # heads_and_shoulders = nfa_cep(qqq, heads_and_shoulders_conditions , "timestamp", 60 * 120)
 # print(heads_and_shoulders.unique("a___row_count__"))
