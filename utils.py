@@ -1,4 +1,4 @@
-import polars, sqlglot, duckdb
+import polars, sqlglot
 import sqlglot.optimizer as optimizer
 from collections import deque
 from collections import namedtuple
