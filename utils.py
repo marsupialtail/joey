@@ -4,6 +4,7 @@ from collections import deque
 from collections import namedtuple
 from tqdm import tqdm
 import time
+from functools import partial
 
 def plot_candlesticks(prices):
     import matplotlib.pyplot as plt
@@ -119,16 +120,63 @@ def preprocess_conditions(events):
     print(event_required_columns)
     return prefilter, touched_columns, event_prefilters, event_dependent_filters, event_required_columns
 
+def partial_any_arg(func, value_locs):
+    def wrapper(tup):
+        new_args = list(tup)
+        for i in sorted(value_locs.keys()):
+            new_args.insert(i, value_locs[i])
+        return func(*new_args)
 
-def preprocess_2(batch, events, time_col, by):
+    return partial(wrapper)
+
+def preprocess_2(batch, events, time_col, by, udfs):
     event_names = [event for event, predicate in events]
     prefilter, touched_columns, event_prefilters, event_predicates, event_required_columns = preprocess_conditions(events)
+
+    udf_required_columns = {event: [] for event in event_names}
+    event_udfs = {event: [] for event in event_names}
+    for event in event_predicates:
+        predicate = event_predicates[event]
+        if predicate is None:
+            continue
+        my_udfs = list(sqlglot.parse_one(predicate).find_all(sqlglot.exp.Anonymous))
+        for udf in my_udfs:
+            name = udf.this # note this name will be upper case by default!
+            if name.lower() in udfs:
+                udf_func = udfs[name.lower()]
+            elif name in udfs:
+                udf_func = udfs[name]
+            elif name.upper() in udfs:
+                udf_func = udfs[name.upper()]
+            else:
+                raise Exception("udf {} not in specified udf dictionary".format(name))
+
+            current_arguments = []
+            prior_arguments = []
+            counter = 0
+            for col in udf.expressions:
+                assert type(col) == sqlglot.exp.Column, "only non-modified column arguments are supported, i.e. you cannot do udf(x + 1)"
+                col_event = col.table
+                col_name = col.name
+                if col_event == event:
+                    current_arguments.append((counter, col_name))
+                else:
+                    prior_arguments.append((col_event, col_name))
+                    udf_required_columns[col_event].append(col_name)
+                counter += 1
+            
+            event_udfs[event].append((name.upper(), udf_func, current_arguments, prior_arguments))
+    
+        event_predicates[event] = sqlglot.parse_one(predicate).transform(lambda node: sqlglot.parse_one(node.this) if isinstance(node, sqlglot.exp.Anonymous) else node).sql()
+    
 
     for event in event_names:
         if event not in event_required_columns:
             event_required_columns[event] = {time_col}
         else:
             event_required_columns[event].add(time_col)
+        for udf_required_col in udf_required_columns[event]:
+            event_required_columns[event].add(udf_required_col)
 
     select_cols = touched_columns.union({time_col}) if by is None else touched_columns.union({time_col, by})
     batch = polars.SQLContext(frame=batch).execute("select {} from frame where {}".format(",".join(select_cols), prefilter)).collect()
@@ -156,4 +204,4 @@ def preprocess_2(batch, events, time_col, by):
         else:
             event_indices[event_name] = None
     
-    return batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns
+    return batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs

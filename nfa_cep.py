@@ -1,6 +1,7 @@
 from utils import * 
+from functools import partial
 
-def nfa_cep(batch, events, time_col, max_span, by = None):
+def nfa_cep(batch, events, time_col, max_span, by = None, udfs = None):
     
     assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
     if by is None:
@@ -8,7 +9,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None):
     else:
         assert by in batch.columns
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns = preprocess_2(batch, events, time_col, by)
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs = preprocess_2(batch, events, time_col, by, udfs)
 
     total_events = len(events)
     total_filter_time = 0
@@ -49,9 +50,25 @@ def nfa_cep(batch, events, time_col, max_span, by = None):
                     total_filter_time += time.time() - start
 
                     # print("{}".format(predicate))
-                    start = time.time()           
-                    matched = polars.SQLContext(frame=matched_sequences[seq_len - 1]).execute(
-                        "select * from frame where {}".format(predicate)).collect()
+                    # start = time.time()        
+
+                    # apply your UDFs here
+
+                    frame = matched_sequences[seq_len - 1]
+                    for udf_name, wrapped_udf, current_arguments, prior_arguments in event_udfs[event_names[seq_len]]:
+                        prior_col_names = [event + "_" + col for event, col in prior_arguments]
+                        required_df = matched_sequences[seq_len - 1].select(prior_col_names)
+                        current_arguments = {loc: batch[col][row] for loc, col in current_arguments}
+                        func = partial_any_arg(wrapped_udf, current_arguments)
+                        result = required_df.apply(lambda x: func(x), return_dtype = polars.Float64())
+                        if len(result.columns) > 2:
+                            raise Exception("UDF must return a single column")
+                        # print(result)
+                        frame = matched_sequences[seq_len - 1].with_columns(result["apply"].alias(udf_name))
+
+                    matched = polars.SQLContext(frame=frame).execute(
+                            "select * from frame where {}".format(predicate)).collect()
+
                     # print(time.time() - start)
 
                     # now horizontally concatenate your table against the matched
