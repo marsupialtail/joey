@@ -134,6 +134,13 @@ def preprocess_2(batch, events, time_col, by, udfs):
     prefilter, touched_columns, event_prefilters, event_predicates, event_required_columns = preprocess_conditions(events)
 
     udf_required_columns = {event: [] for event in event_names}
+
+    udf_set = set()
+    for udf in udfs:
+        if udf.lower() in udf_set:
+            raise Exception("UDF names are case insensitive. You cannot define both LIN_REG and lin_reg for example.")
+        udf_set.add(udf.lower())
+
     event_udfs = {event: [] for event in event_names}
     for event in event_predicates:
         predicate = event_predicates[event]
@@ -165,6 +172,7 @@ def preprocess_2(batch, events, time_col, by, udfs):
                     udf_required_columns[col_event].append(col_name)
                 counter += 1
             
+            # the predicate will automatically upper case the udf name
             event_udfs[event].append((name.upper(), udf_func, current_arguments, prior_arguments))
     
         event_predicates[event] = sqlglot.parse_one(predicate).transform(lambda node: sqlglot.parse_one(node.this) if isinstance(node, sqlglot.exp.Anonymous) else node).sql()

@@ -18,6 +18,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = None):
     partitioned = batch.partition_by(by) if by is not None else [batch]
 
     results = []
+    udf_return_types = {}
 
     for batch in tqdm(partitioned) if by is not None else partitioned:
 
@@ -60,7 +61,12 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = None):
                         required_df = matched_sequences[seq_len - 1].select(prior_col_names)
                         current_arguments = {loc: batch[col][row] for loc, col in current_arguments}
                         func = partial_any_arg(wrapped_udf, current_arguments)
-                        result = required_df.apply(lambda x: func(x), return_dtype = polars.Float64())
+                        if udf_name not in udf_return_types:
+                            result = required_df.apply(lambda x: func(x))
+                            if len(result) > 0:
+                                udf_return_types[udf_name] = result["apply"].dtype
+                        else:
+                            result = required_df.apply(lambda x: func(x), return_dtype = udf_return_types[udf_name])
                         if len(result.columns) > 2:
                             raise Exception("UDF must return a single column")
                         # print(result)
