@@ -1,7 +1,7 @@
 from utils import * 
 from functools import partial
 
-def nfa_cep(batch, events, time_col, max_span, by = None, udfs = None):
+def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
     
     assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
     if by is None:
