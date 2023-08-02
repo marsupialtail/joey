@@ -1,20 +1,21 @@
 from nfa_cep import nfa_cep
 from interval_nfa_cep import nfa_interval_cep_1
+from interval_vector_cep import vector_interval_cep
 import polars
 
-# crimes = polars.read_parquet("crimes.parquet")
-# results = nfa_cep(crimes, [('a', "a.primary_category_id = 27"), 
-#      ('b', """b.primary_category_id = 1 and b.LATITUDE - a.LATITUDE >= -0.025
-#     and b.LATITUDE - a.LATITUDE <= 0.025
-#     and b.LONGITUDE - a.LONGITUDE >= -0.025
-#     and b.LONGITUDE - a.LONGITUDE <= 0.025"""),
-#     ('c', """c.primary_category_id = 24 and c.LATITUDE - a.LATITUDE >= -0.025
-#     and c.LATITUDE - a.LATITUDE <= 0.025
-#     and c.LONGITUDE - a.LONGITUDE >= -0.025
-#     and c.LONGITUDE - a.LONGITUDE <= 0.025""")], "TIMESTAMP_LONG",  20000000)
+crimes = polars.read_parquet("crimes.parquet")
+results = nfa_cep(crimes, [('a', "a.primary_category_id = 27"), 
+     ('b', """b.primary_category_id = 1 and b.LATITUDE - a.LATITUDE >= -0.025
+    and b.LATITUDE - a.LATITUDE <= 0.025
+    and b.LONGITUDE - a.LONGITUDE >= -0.025
+    and b.LONGITUDE - a.LONGITUDE <= 0.025"""),
+    ('c', """c.primary_category_id = 24 and c.LATITUDE - a.LATITUDE >= -0.025
+    and c.LATITUDE - a.LATITUDE <= 0.025
+    and c.LONGITUDE - a.LONGITUDE >= -0.025
+    and c.LONGITUDE - a.LONGITUDE <= 0.025""")], "TIMESTAMP_LONG",  20000000)
 
-# print(results)
-# results.write_parquet("results.parquet")
+print(results)
+results.write_parquet("results.parquet")
 
 
 qqq = polars.read_parquet("2021.parquet").with_row_count("row_count").with_columns(polars.col("row_count").cast(polars.Int64()))
@@ -95,13 +96,20 @@ def lin_reg(a_close, a_timestamp, c_close, c_timestamp, e_timestamp):
 # # plot_candlesticks(original_qqq)
 
 # ascending_triangles = nfa_cep(qqq, ascending_triangles_conditions , "timestamp", 60 * 120)
+# ascending_triangles = vector_interval_cep(qqq, ascending_triangles_conditions , "timestamp", 60 * 120)
+# ascending_triangles = nfa_interval_cep_1(qqq, ascending_triangles_conditions , "timestamp", 60 * 120)
+
 # print(ascending_triangles.unique("a_timestamp"))
 
 # cup_and_handles = nfa_cep(daily_qqq, udf_cup_and_handle , "timestamp", 30, by = "symbol", udfs = {"lin_reg": lin_reg})
-cup_and_handles = nfa_cep(daily_qqq, cup_and_handle_conditions , "timestamp", 30, by = "symbol")
+# cup_and_handles = nfa_cep(daily_qqq, cup_and_handle_conditions , "timestamp", 30, by = "symbol")
+# cup_and_handles = vector_interval_cep(daily_qqq, cup_and_handle_conditions , "timestamp", 30, by = "symbol")
 
-print(cup_and_handles.unique(["a_timestamp", "symbol"]))
-cup_and_handles.write_parquet("cup_and_handles.parquet")
+# minutely = polars.read_parquet("combined.parquet")
+# cup_and_handles = nfa_cep(minutely, cup_and_handle_conditions , "timestamp", 7200, by = "symbol")
+
+# print(cup_and_handles.unique(["a_timestamp", "symbol"]))
+# cup_and_handles.write_parquet("cup_and_handles.parquet")
 
 # heads_and_shoulders = nfa_cep(qqq, heads_and_shoulders_conditions , "timestamp", 60 * 120)
 # print(heads_and_shoulders.unique("a___row_count__"))

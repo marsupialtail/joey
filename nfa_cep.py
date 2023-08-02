@@ -1,5 +1,6 @@
 from utils import * 
 from functools import partial
+import numpy as np
 
 def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
     
@@ -13,12 +14,14 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
 
     total_events = len(events)
     total_filter_time = 0
+    total_match_time = 0
     total_other_time = 0
 
     partitioned = batch.partition_by(by) if by is not None else [batch]
 
     results = []
     udf_return_types = {}
+    length_dicts = {event_name: [] for event_name in event_names}
 
     for batch in tqdm(partitioned) if by is not None else partitioned:
 
@@ -30,12 +33,10 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
         for row in tqdm(range(len(batch))) if by is None else range(len(batch)):
             current_time = batch[time_col][row]
             global_row_count = batch["__row_count__"][row]
-            this_row_can_be = [i for i in range(1, total_events) if event_indices[event_names[i]] is None or global_row_count in event_indices[event_names[i]]]
-                
-            # if row % 1000 == 0:
-            #     print(total_filter_time, total_other_time)
+            this_row_can_be = [i for i in range(1, total_events) if event_indices[event_names[i]] is None or global_row_count in event_indices[event_names[i]]]                
             
-            for seq_len in this_row_can_be:
+            # we should do this in reverse order because once a row is matched on event B it should not match against itself for C.
+            for seq_len in sorted(this_row_can_be)[::-1]:
                 
                 # evaluate the predicate against matched_sequences[seq_len - 1]
                 if matched_sequences[seq_len - 1] is not None and len(matched_sequences[seq_len - 1]) > 0:
@@ -47,13 +48,21 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
 
                     # print(matched_sequences)      
                     start = time.time()
-                    matched_sequences[seq_len - 1] = matched_sequences[seq_len - 1].filter(polars.col(event_names[seq_len - 1] + "_" + time_col) >= current_time - max_span)
+
+                    # filtering by the first event is very slow for some reason likely because of discontiguous memory
+                    first_event_time_col = event_names[0] + "_" + time_col
+                    index = np.searchsorted(matched_sequences[seq_len - 1][first_event_time_col].to_numpy(), current_time - max_span, side='left') 
+                    matched_sequences[seq_len - 1] = matched_sequences[seq_len - 1][index:]
+                    # this is slow, use the numpy impl
+                    # matched_sequences[seq_len - 1] = matched_sequences[seq_len - 1].set_sorted(first_event_time_col).filter(polars.col(first_event_time_col) >= current_time - max_span)
+
                     total_filter_time += time.time() - start
 
                     # print("{}".format(predicate))
-                    # start = time.time()        
+                            
 
                     # apply your UDFs here
+                    start = time.time()
 
                     frame = matched_sequences[seq_len - 1]
                     for udf_name, wrapped_udf, current_arguments, prior_arguments in event_udfs[event_names[seq_len]]:
@@ -72,11 +81,13 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
                         # print(result)
                         frame = matched_sequences[seq_len - 1].with_columns(result["apply"].alias(udf_name))
 
+                    start = time.time() 
                     matched = polars.SQLContext(frame=frame).execute(
                             "select * from frame where {}".format(predicate)).collect()
-
-                    # print(time.time() - start)
-
+                    total_match_time += time.time() - start
+                    start = time.time()
+                    # print("select * from frame where {}".format(predicate), "LEN:{}".format(len(frame)), time.time() - start)
+                    length_dicts[event_names[seq_len]].append(len(frame))
                     # now horizontally concatenate your table against the matched
                     if len(matched) > 0:
                         matched = matched.hstack(repeat_row(batch[row].rename(rename_dicts[event_names[seq_len]])
@@ -85,6 +96,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
                             matched_sequences[seq_len] = matched
                         else:
                             matched_sequences[seq_len].vstack(matched, in_place=True)
+                            matched_sequences[seq_len] = matched_sequences[seq_len].sort(event_names[0] + "_" + time_col)
                     total_other_time += time.time() - start
             
             if event_indices[event_names[0]] is None:
@@ -100,4 +112,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
             else:
                 results.append(matched_sequences[total_events - 1].filter(polars.col(event_names[-1] + "_" + time_col) - polars.col(event_names[0] + "_" + time_col) <= max_span))
     
+    print(total_filter_time, total_match_time, total_other_time)
+    for key in length_dicts:
+        print(key, len(length_dicts[key]), np.mean(length_dicts[key]))
     return polars.concat(results)

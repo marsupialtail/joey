@@ -5,6 +5,7 @@ from collections import namedtuple
 from tqdm import tqdm
 import time
 from functools import partial
+import numpy as np
 
 def plot_candlesticks(prices):
     import matplotlib.pyplot as plt
@@ -212,4 +213,23 @@ def preprocess_2(batch, events, time_col, by, udfs):
         else:
             event_indices[event_name] = None
     
+    # batch = batch.with_columns(polars.col("timestamp").cast(polars.Int64())).set_sorted("timestamp")
+    # batch = batch.with_columns(batch.groupby_rolling("timestamp", period = "7200i").agg([
+    #     polars.col("close").min().alias("lag_min"),
+    #     polars.col("close").max().alias("lag_max")]))
+    
+#     ascending_triangles_conditions =  [('a', "a.is_local_bottom"), # first bottom 
+#      ('b', """b.is_local_top and b.close > a.close * 1.0025"""), # first top
+#      ('c', """c.is_local_bottom and c.close < b.close * 0.9975 and c.close > a.close * 1.0025"""), # second bottom, must be higher than first bottom
+#      ('d', """d.is_local_top and d.close > c.close * 1.0025 and abs(d.close / b.close) < 1.0025"""), # second top, must be similar to first top
+#      ('e', """e.is_local_bottom and e.close < d.close * 0.9975 and e.close > (c.close - a.close) / (c.timestamp - a.timestamp) * (e.timestamp - a.timestamp) + a.close"""), # third bottom, didn't break support
+#      ('f', """f.close > d.close * 1.0025""") #breakout resistance
+# ]
+    
+    # event_indices[event_names[1]] = event_indices[event_names[1]].intersection(set(batch.filter(polars.col("close") > polars.col("lag_min") * 1.0025)["__row_count__"]))
+    # event_indices[event_names[2]] = event_indices[event_names[2]].intersection(set(batch.filter((polars.col("close") < polars.col("lag_max") * 0.9975) & (polars.col("close") > polars.col("lag_min") * 1.0025))["__row_count__"]))
+    # event_indices[event_names[3]] = event_indices[event_names[3]].intersection(set(batch.filter((polars.col("close") > polars.col("lag_min") * 1.0025))["__row_count__"]))
+    # event_indices[event_names[4]] = event_indices[event_names[4]].intersection(set(batch.filter((polars.col("close") < polars.col("lag_max") * 0.9975))["__row_count__"]))
+    # event_indices[event_names[5]] = set(batch.filter((polars.col("close") > polars.col("lag_min") * 1.0025))["__row_count__"])
+
     return batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs

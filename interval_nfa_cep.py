@@ -1,6 +1,6 @@
 from utils import * 
 
-def nfa_interval_cep_1(batch, events, time_col, max_span, by = None):
+def nfa_interval_cep_1(batch, events, time_col, max_span, by = None, event_udfs = {}):
     
     assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
     if by is None:
@@ -8,7 +8,7 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None):
     else:
         assert by in batch.columns
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns = preprocess_2(batch, events, time_col, by)
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs = preprocess_2(batch, events, time_col, by, event_udfs)
 
     total_events = len(events)
 
@@ -43,7 +43,7 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None):
                 global_row_count = interval["__row_count__"][row]
                 this_row_can_be = [i for i in range(1, total_events) if event_indices[event_names[i]] is None or global_row_count in event_indices[event_names[i]]]
                 
-                for seq_len in this_row_can_be:
+                for seq_len in sorted(this_row_can_be)[::-1]:
                     
                     # evaluate the predicate against matched_sequences[seq_len - 1]
                     if matched_sequences[seq_len - 1] is not None and len(matched_sequences[seq_len - 1]) > 0:
@@ -72,4 +72,5 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None):
                 else:
                     end_results.append(matched_sequences[total_events - 1].with_columns(polars.lit(batch[by][start_row]).alias(by)))
 
+    
     return polars.concat(end_results)
