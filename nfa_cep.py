@@ -28,13 +28,19 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
         assert batch[time_col].is_sorted()
 
         matched_sequences = {i: None for i in range(total_events)}
-        matched_sequences[0] = batch[0].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
+        matched_sequences[0] = batch[0].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
+
+        time_col_npy = batch[time_col].to_numpy()
+        row_count_npy = batch["__row_count__"].to_numpy()
 
         for row in tqdm(range(len(batch))) if by is None else range(len(batch)):
-            current_time = batch[time_col][row]
-            global_row_count = batch["__row_count__"][row]
+
+            start = time.time()
+            current_time = time_col_npy[row]
+            global_row_count =  row_count_npy[row]
             this_row_can_be = [i for i in range(1, total_events) if event_indices[event_names[i]] is None or global_row_count in event_indices[event_names[i]]]                
-            
+            total_other_time += time.time() - start
+
             # we should do this in reverse order because once a row is matched on event B it should not match against itself for C.
             for seq_len in sorted(this_row_can_be)[::-1]:
                 
@@ -59,7 +65,6 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
                     total_filter_time += time.time() - start
 
                     # print("{}".format(predicate))
-                            
 
                     # apply your UDFs here
                     start = time.time()
@@ -88,22 +93,24 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
                     start = time.time()
                     # print("select * from frame where {}".format(predicate), "LEN:{}".format(len(frame)), time.time() - start)
                     length_dicts[event_names[seq_len]].append(len(frame))
-                    # now horizontally concatenate your table against the matched
+                    # now horizontally concatenate your table against the matched, with_columns with polars lit is faster than my repeat_rows function
                     if len(matched) > 0:
-                        matched = matched.hstack(repeat_row(batch[row].rename(rename_dicts[event_names[seq_len]])
-                                                            .select([event_names[seq_len] + "_" + k for k in event_required_columns[event_names[seq_len]]]), len(matched)))
+                        matched = matched.with_columns([
+                            polars.lit(batch[col][row]).alias(event_names[seq_len] + "_" + col) for col in event_required_columns[event_names[seq_len]]
+                        ])
+                        matched = matched.with_columns(polars.lit(batch["__row_count__"][row]).alias(event_names[seq_len] + "___row_count__"))
+
                         if matched_sequences[seq_len] is None:
                             matched_sequences[seq_len] = matched
                         else:
-                            matched_sequences[seq_len].vstack(matched, in_place=True)
-                            matched_sequences[seq_len] = matched_sequences[seq_len].sort(event_names[0] + "_" + time_col)
+                            matched_sequences[seq_len] = matched_sequences[seq_len].vstack(matched).sort(event_names[0] + "_" + time_col)
                     total_other_time += time.time() - start
             
             if event_indices[event_names[0]] is None:
-                matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
+                matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
             else:
                 if global_row_count in event_indices[event_names[0]]:
-                    matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
+                    matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
         
         if matched_sequences[total_events - 1] is not None:
             if by is not None:
@@ -113,6 +120,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
                 results.append(matched_sequences[total_events - 1].filter(polars.col(event_names[-1] + "_" + time_col) - polars.col(event_names[0] + "_" + time_col) <= max_span))
     
     print(total_filter_time, total_match_time, total_other_time)
+    print("TIME SPENT IN FILTERING {}".format(total_match_time))
     for key in length_dicts:
         print(key, len(length_dicts[key]), np.mean(length_dicts[key]))
     return polars.concat(results)
