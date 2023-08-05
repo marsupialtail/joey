@@ -17,7 +17,8 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
     total_events = len(events)
 
-    assert event_indices[event_names[0]] != None, "this is for things with first event filter"
+    if event_indices[event_names[0]] != None:
+        print("vectored cep is for things with first event filter, likely will be slow")
 
     end_results = []
 
@@ -46,20 +47,24 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
     length_dicts = {event_name: [] for event_name in event_names}
 
-    for batch in partitioned if by is None else tqdm(partitioned):
+    for partition in partitioned if by is None else tqdm(partitioned):
         
-        start_rows = batch.select(["__row_count__", time_col]).join(polars.from_dict({"row_nrs": list(event_indices[event_names[0]])}).
+        if event_indices[event_names[0]] is not None:
+            start_rows = partition.select(["__row_count__", time_col]).join(polars.from_dict({"row_nrs": list(event_indices[event_names[0]])}).
                             with_columns(polars.col("row_nrs").cast(polars.UInt32())), left_on = "__row_count__", right_on = "row_nrs", how = "semi")
+        else:
+            # likely to be slow, no filter on first event
+            start_rows = partition.select(["__row_count__", time_col])
         end_times = start_rows.with_columns(polars.col(time_col) + max_span)
         assert end_times[time_col].is_sorted()
         # perform as asof join to figure out the end_rows
-        end_rows = end_times.set_sorted(time_col).join_asof(batch.select(["__row_count__", time_col]).set_sorted(time_col), left_on = time_col, right_on = time_col, strategy = "backward")
+        end_rows = end_times.set_sorted(time_col).join_asof(partition.select(["__row_count__", time_col]).set_sorted(time_col), left_on = time_col, right_on = time_col, strategy = "backward")
         result = end_rows.with_columns([
             polars.col("__row_count__").alias("__arc__"),
             polars.col("__row_count___right").alias("__crc__"),
         ])
         
-        start_row_count = batch["__row_count__"][0]
+        start_row_count = partition["__row_count__"][0]
         for bound in (tqdm(result.to_dicts()) if by is None else result.to_dicts()):
 
             start_nr = bound["__arc__"]
@@ -72,14 +77,14 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
             if start_nr in matched_ends or end_nr <= start_nr:
                 continue
-            my_section = batch[start_nr - start_row_count: end_nr + 1 - start_row_count] #.to_arrow()
+            my_section = partition[start_nr - start_row_count: end_nr + 1 - start_row_count] #.to_arrow()
             fate = {event_names[0] + "_" + col : my_section[col][0] for col in my_section.columns}
             stack = deque([(0, my_section[0], [fate], [start_nr])])
             
             while stack:
                 marker, vertex, path, matched_event = stack.pop()
             
-                remaining_df = my_section[marker:]# .to_arrow()
+                remaining_df = my_section[marker + 1:]# .to_arrow()
                 next_event_name = event_names[len(path)]
                 next_event_filter = event_predicates[len(path)]
                 
@@ -89,7 +94,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
                         next_event_filter = next_event_filter.replace(fixed_col, str(fate[fixed_col]))
 
                 startt = time.time()
-                query = "select {}, {}, close from frame where __possible_{}__ and {}".format("__row_count__", time_col, next_event_name, next_event_filter)
+                query = "select {}, {} from frame where __possible_{}__ and {}".format("__row_count__", ",".join(event_required_columns[next_event_name]), next_event_name, next_event_filter)
                 matched = polars.SQLContext(frame=remaining_df).execute(query).collect()
                 total_exec_times.append(time.time() - startt)
                 length_dicts[next_event_name].append(len(remaining_df))
@@ -101,17 +106,28 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
                 if len(matched) > 0:
                     if next_event_name == event_names[-1]:
                         matched_ends.append(start_nr)
-                        matched_events.append(matched_event + [end_nr])
+                        matched_events.append(matched_event + [matched["__row_count__"][0]])
                         break
                     else:
                         for matched_row in matched.iter_rows(named = True):
                             my_fate = {next_event_name + "_" + col : matched_row[col] for col in matched_row}
                             # the row count of the matched row in the section is it's row count col value minus
                             # the start row count of the section
-                            stack.append((matched_row["__row_count__"] - start_nr, matched_row, path + [my_fate], matched_event + [matched_row[time_col]]))
+                            stack.append((matched_row["__row_count__"] - start_nr, matched_row, path + [my_fate], matched_event + [matched_row["__row_count__"]]))
                 overhead += time.time() - startt
-    print(len(matched_events))
-    print(sum(total_exec_times), len(total_exec_times))
+
+    # now create a dataframe from the matched events, first flatten matched_events into a flat list
+    matched_events = [item for sublist in matched_events for item in sublist]
+    matched_events = batch[matched_events].select(["__row_count__", time_col, "symbol"])
+    
+    events = [matched_events[i::total_events] for i in range(total_events)]
+    for i in range(total_events):
+        if i != 0:
+            events[i] = events[i].drop("symbol")
+        events[i] = events[i].rename({"__row_count__" : event_names[i] + "___row_count__", time_col : event_names[i] + "_" + time_col})
+    matched_events = polars.concat(events, how = 'horizontal')
+
+    print("TIME SPENT IN FILTER {} {} ".format(sum(total_exec_times), len(total_exec_times)))
     for key in length_dicts:
         print(key, len(length_dicts[key]), np.mean(length_dicts[key]))
     print(overhead)

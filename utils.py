@@ -114,11 +114,11 @@ def preprocess_conditions(events):
     prefilter = optimizer.simplify.simplify(prefilter).sql()
     prefilter = remove_qualifier(prefilter)
     last_event_dependent_on_first_event_filter = optimizer.simplify.simplify(last_event_dependent_on_first_event_filter).sql()
-    print(prefilter)
-    print(touched_columns)
-    print(event_prefilters)
-    print(event_dependent_filters)
-    print(event_required_columns)
+    # print(prefilter)
+    # print(touched_columns)
+    # print(event_prefilters)
+    # print(event_dependent_filters)
+    # print(event_required_columns)
     return prefilter, touched_columns, event_prefilters, event_dependent_filters, event_required_columns
 
 def partial_any_arg(func, value_locs):
