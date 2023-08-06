@@ -27,11 +27,10 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
 
         assert batch[time_col].is_sorted()
 
-        matched_sequences = {i: None for i in range(total_events)}
-        matched_sequences[0] = batch[0].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
-
         time_col_npy = batch[time_col].to_numpy()
         row_count_npy = batch["__row_count__"].to_numpy()
+
+        matched_sequences = {i: None for i in range(total_events)}
 
         for row in tqdm(range(len(batch))) if by is None else range(len(batch)):
 
@@ -106,12 +105,12 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
                             matched_sequences[seq_len] = matched_sequences[seq_len].vstack(matched).sort(event_names[0] + "_" + time_col)
                     total_other_time += time.time() - start
             
-            if event_indices[event_names[0]] is None:
-                matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
-            else:
-                if global_row_count in event_indices[event_names[0]]:
-                    matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place=True)
-        
+            if event_indices[event_names[0]] is None or global_row_count in event_indices[event_names[0]]:
+                if matched_sequences[0] is None:
+                    matched_sequences[0] = batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
+                else:
+                    matched_sequences[0].vstack(batch[row].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]]), in_place = True)
+
         if matched_sequences[total_events - 1] is not None:
             if by is not None:
                 key = batch[by][0]
