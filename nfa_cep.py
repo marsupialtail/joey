@@ -114,12 +114,15 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
         if matched_sequences[total_events - 1] is not None:
             if by is not None:
                 key = batch[by][0]
-                results.append(matched_sequences[total_events - 1].filter(polars.col(event_names[-1] + "_" + time_col) - polars.col(event_names[0] + "_" + time_col) <= max_span).with_columns(polars.lit(key).alias(by)))
+                results.append(matched_sequences[total_events - 1].with_columns(polars.lit(key).alias(by)))
             else:
-                results.append(matched_sequences[total_events - 1].filter(polars.col(event_names[-1] + "_" + time_col) - polars.col(event_names[0] + "_" + time_col) <= max_span))
-    
+                results.append(matched_sequences[total_events - 1])
+
     print(total_filter_time, total_match_time, total_other_time)
     print("TIME SPENT IN FILTERING {}".format(total_match_time))
     for key in length_dicts:
         print(key, len(length_dicts[key]), np.mean(length_dicts[key]))
+    
+    print("TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts]))
+    print("TOTAL FILTERED ROWS: ", sum([np.sum(length_dicts[key]) for key in length_dicts]))
     return polars.concat(results)

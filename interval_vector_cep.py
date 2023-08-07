@@ -17,7 +17,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
     total_events = len(events)
 
-    if event_indices[event_names[0]] != None:
+    if event_indices[event_names[0]] == None:
         print("vectored cep is for things with first event filter, likely will be slow")
 
     end_results = []
@@ -118,17 +118,20 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
     # now create a dataframe from the matched events, first flatten matched_events into a flat list
     matched_events = [item for sublist in matched_events for item in sublist]
-    matched_events = batch[matched_events].select(["__row_count__", time_col, "symbol"])
+    matched_events = batch[matched_events].select(["__row_count__", time_col, by]) if by is not None else batch[matched_events].select(["__row_count__", time_col])
     
     events = [matched_events[i::total_events] for i in range(total_events)]
     for i in range(total_events):
-        if i != 0:
-            events[i] = events[i].drop("symbol")
+        if i != 0 and by is not None:
+            events[i] = events[i].drop(by)
         events[i] = events[i].rename({"__row_count__" : event_names[i] + "___row_count__", time_col : event_names[i] + "_" + time_col})
     matched_events = polars.concat(events, how = 'horizontal')
 
     print("TIME SPENT IN FILTER {} {} ".format(sum(total_exec_times), len(total_exec_times)))
     for key in length_dicts:
         print(key, len(length_dicts[key]), np.mean(length_dicts[key]))
+    
+    print("TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts]))
+    print("TOTAL FILTERED ROWS: ", sum([np.sum(length_dicts[key]) for key in length_dicts]))
     print(overhead)
     return matched_events

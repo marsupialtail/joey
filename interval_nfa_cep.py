@@ -21,7 +21,7 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None, event_udfs 
     counter = 0
 
     partitioned = batch.partition_by(by) if by is not None else [batch]
-
+    length_dicts = {event_name: [] for event_name in event_names}
     for batch in partitioned if by is None else tqdm(partitioned):
 
         for start_row in tqdm(range(len(batch))) if by is None else range(len(batch)):
@@ -37,12 +37,12 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None, event_udfs 
             interval = batch.filter((polars.col(time_col) >= start_time) & (polars.col(time_col) <= end_time))
 
             matched_sequences = {i: None for i in range(total_events)}
-            matched_sequences[0] = interval[0].rename(rename_dicts[event_names[0]]).select([event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
+            matched_sequences[0] = interval[0].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
         
             for row in range(1, len(interval)):
                 global_row_count = interval["__row_count__"][row]
                 this_row_can_be = [i for i in range(1, total_events) if event_indices[event_names[i]] is None or global_row_count in event_indices[event_names[i]]]
-                
+                early_exit = False
                 for seq_len in sorted(this_row_can_be)[::-1]:
                     
                     # evaluate the predicate against matched_sequences[seq_len - 1]
@@ -53,18 +53,30 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None, event_udfs 
                             predicate = predicate.replace(event_names[seq_len] + "_" + col, str(interval[col][row]))
                         # print(matched_sequences)      
                         # print("{}".format(predicate))
+                        start = time.time()
                         matched = polars.SQLContext(frame=matched_sequences[seq_len - 1]).execute(
                             "select * from frame where {}".format(predicate)).collect()
-                        # print(time.time() - start)
+                        length_dicts[event_names[seq_len]].append(len(matched_sequences[seq_len - 1]))
+                        total_filter_time += time.time() - start
 
                         # now horizontally concatenate your table against the matched
                         if len(matched) > 0:
-                            matched = matched.hstack(repeat_row(interval[row].rename(rename_dicts[event_names[seq_len]])
-                                                                .select([event_names[seq_len] + "_" + k for k in event_required_columns[event_names[seq_len]]]), len(matched)))
+                            
+                            matched = matched.with_columns([
+                                polars.lit(interval[col][row]).alias(event_names[seq_len] + "_" + col) for col in event_required_columns[event_names[seq_len]]
+                            ])
+                            matched = matched.with_columns(polars.lit(interval["__row_count__"][row]).alias(event_names[seq_len] + "___row_count__"))
+                            
                             if matched_sequences[seq_len] is None:
                                 matched_sequences[seq_len] = matched
                             else:
                                 matched_sequences[seq_len].vstack(matched, in_place=True)
+                            
+                            if seq_len == total_events - 1:
+                                early_exit = True
+                                break
+                if early_exit:
+                    break
             
             if matched_sequences[total_events - 1] is not None:
                 if by is None:
@@ -72,5 +84,12 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None, event_udfs 
                 else:
                     end_results.append(matched_sequences[total_events - 1].with_columns(polars.lit(batch[by][start_row]).alias(by)))
 
+    print("TOTAL FILTER TIME {}".format(total_filter_time))
+    for key in length_dicts:
+        print(key, len(length_dicts[key]), np.mean(length_dicts[key]))
     
+    print("TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts]))
+    print("TOTAL FILTERED ROWS: ", sum([np.sum(length_dicts[key]) for key in length_dicts]))
     return polars.concat(end_results)
+
+
