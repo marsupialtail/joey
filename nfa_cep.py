@@ -10,7 +10,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
     else:
         assert by in batch.columns
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs = preprocess_2(batch, events, time_col, by, udfs)
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs = preprocess_2(batch, events, time_col, by, udfs, max_span)
 
     total_events = len(events)
     total_filter_time = 0

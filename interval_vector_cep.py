@@ -9,7 +9,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
     else:
         assert by in batch.columns
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs = preprocess_2(batch, events, time_col, by, event_udfs)
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
     # this hack needs to be corrected, this basically makes all the {event_name}_{col_name} col names just {col_name} for the current event
     for i in range(1, len(event_names)):
         for col in event_independent_columns[event_names[i]]:
@@ -69,9 +69,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
             start_nr = bound["__arc__"]
             end_nr = bound["__crc__"]
-            # start_ts = bound["__ats__"]
-            # end_ts = bound["__cts__"]
-            # print(start_nr)
+
             # match recognize default is one pattern per start. we can change it to one pattern per end too
             # if end_nr in matched_ends:
 
@@ -82,7 +80,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
             stack = deque([(0, my_section[0], [fate], [start_nr])])
             
             while stack:
-                marker, vertex, path, matched_event = stack.pop()
+                marker, vertex, path, matched_event = stack.popleft()
             
                 remaining_df = my_section[marker + 1:]# .to_arrow()
                 next_event_name = event_names[len(path)]
@@ -113,7 +111,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
                             my_fate = {next_event_name + "_" + col : matched_row[col] for col in matched_row}
                             # the row count of the matched row in the section is it's row count col value minus
                             # the start row count of the section
-                            stack.append((matched_row["__row_count__"] - start_nr, matched_row, path + [my_fate], matched_event + [matched_row["__row_count__"]]))
+                            stack.appendleft((matched_row["__row_count__"] - start_nr, matched_row, path + [my_fate], matched_event + [matched_row["__row_count__"]]))
                 overhead += time.time() - startt
 
     # now create a dataframe from the matched events, first flatten matched_events into a flat list

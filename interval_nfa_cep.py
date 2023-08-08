@@ -8,7 +8,7 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None, event_udfs 
     else:
         assert by in batch.columns
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs = preprocess_2(batch, events, time_col, by, event_udfs)
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
 
     total_events = len(events)
 
