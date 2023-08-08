@@ -90,6 +90,9 @@ def nfa_interval_cep_1(batch, events, time_col, max_span, by = None, event_udfs 
     
     print("TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts]))
     print("TOTAL FILTERED ROWS: ", sum([np.sum(length_dicts[key]) for key in length_dicts]))
-    return polars.concat(end_results)
+    if len(end_results) > 0:
+        return polars.concat(end_results)
+    else:
+        return None
 
 

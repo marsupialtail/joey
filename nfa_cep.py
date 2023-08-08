@@ -125,4 +125,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, udfs = {}):
     
     print("TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts]))
     print("TOTAL FILTERED ROWS: ", sum([np.sum(length_dicts[key]) for key in length_dicts]))
-    return polars.concat(results)
+    if len(results) > 0:
+        return polars.concat(results)
+    else:
+        return None

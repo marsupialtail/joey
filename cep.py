@@ -129,7 +129,7 @@ test_1 = [('x0', 'x0.high < x0.rolling_5d_mean'),
 
 test_2 = [('x0', 'x0.high < x0.rolling_5d_mean'),
  ('x1', 'x1.high < x1.rolling_5d_mean and x1.timestamp = x0.timestamp + 1'),
- ('x2', 'x2.high > x2.rolling_5d_mean and x2.timestamp = x1.timestamp + 1 and x2.timestamp = 61')]
+ ('x2', 'x2.high > x2.rolling_5d_mean and x2.timestamp = x1.timestamp + 1')]
 
 heads_and_shoulders_conditions = [('a', "a.is_local_top"), # first shoulder
         ('b', """b.is_local_bottom and b.close < a.close * LOWER"""), # first bottom
@@ -174,9 +174,9 @@ def lin_reg(a_close, a_timestamp, c_close, c_timestamp, e_timestamp):
 # cup_and_handles = nfa_cep(minutely, cup_and_handle_conditions , "timestamp", 7200, by = "symbol")
 
 data = daily_qqq
-conditions = [test_1]
+conditions = [test_2]
 strategies = [("nfa", nfa_cep), ("interval_nfa", nfa_interval_cep_1), ("interval_vec", vector_interval_cep)]
-span = 7
+span = 6
 by = "symbol"
 
 UPPER = 1.0025
