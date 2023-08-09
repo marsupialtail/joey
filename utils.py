@@ -1,3 +1,5 @@
+import os
+os.environ["POLARS_MAX_THREADS"] = "1" 
 import polars, sqlglot
 import sqlglot.optimizer as optimizer
 from collections import deque

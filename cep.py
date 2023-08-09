@@ -174,14 +174,14 @@ def lin_reg(a_close, a_timestamp, c_close, c_timestamp, e_timestamp):
 # minutely = polars.read_parquet("filtered_combined.parquet")
 # cup_and_handles = nfa_cep(minutely, cup_and_handle_conditions , "timestamp", 7200, by = "symbol")
 
-data = daily_qqq
+data = qqq
 conditions = [cup_and_handle_conditions]
 strategies = [("interval_nfa_sqlite", nfa_interval_cep_sqlite), ("interval_vec", vector_interval_cep), ("nfa", nfa_cep) ]
-span = 30
-by = "symbol"
+span = 7200
+by = None
 
-UPPER = 1.01
-LOWER = 0.99
+UPPER = 1.0025
+LOWER = 0.9975
 
 for condition in conditions:
 
