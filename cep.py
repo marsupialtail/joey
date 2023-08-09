@@ -1,5 +1,6 @@
 from nfa_cep import nfa_cep
-from interval_nfa_cep import nfa_interval_cep_1
+from interval_nfa_cep_polars import nfa_interval_cep_polars
+from interval_nfa_cep_sqlite import nfa_interval_cep_sqlite
 from interval_vector_cep import vector_interval_cep
 import sqlglot
 import polars
@@ -64,14 +65,14 @@ daily_qqq = daily_qqq.groupby_rolling("row_count", period = "10i", offset = "-5i
 daily_qqq = daily_qqq.rename({"row_count": "timestamp"})
 daily_qqq.write_parquet("processed_daily_qqq.parquet")
 
-daily_qqq = polars.read_parquet("daily.parquet")
-filtered_symbols = daily_qqq.groupby("symbol").agg([polars.count()]).filter(polars.col("count") == 252).select(["symbol"])
-daily_qqq = filtered_symbols.join(daily_qqq, "symbol")
-daily_qqq = daily_qqq.sort(["symbol", "date"])
-daily_qqq = polars.concat([i.with_row_count("row_count") for i in daily_qqq.partition_by("symbol")]).with_columns(polars.col("row_count").cast(polars.Int64()))
-daily_qqq = daily_qqq.groupby_rolling("row_count", period = "5i", by = "symbol", check_sorted = False).agg([
-        polars.col("close").mean().alias("rolling_5d_mean")]).hstack(daily_qqq.select(["close", "high"]))
-daily_qqq = daily_qqq.rename({"row_count": "timestamp"})
+# daily_qqq = polars.read_parquet("daily.parquet")
+# filtered_symbols = daily_qqq.groupby("symbol").agg([polars.count()]).filter(polars.col("count") == 252).select(["symbol"])
+# daily_qqq = filtered_symbols.join(daily_qqq, "symbol")
+# daily_qqq = daily_qqq.sort(["symbol", "date"])
+# daily_qqq = polars.concat([i.with_row_count("row_count") for i in daily_qqq.partition_by("symbol")]).with_columns(polars.col("row_count").cast(polars.Int64()))
+# daily_qqq = daily_qqq.groupby_rolling("row_count", period = "5i", by = "symbol", check_sorted = False).agg([
+#         polars.col("close").mean().alias("rolling_5d_mean")]).hstack(daily_qqq.select(["close", "high"]))
+# daily_qqq = daily_qqq.rename({"row_count": "timestamp"})
 # daily_qqq.write_parquet("david_daily_qqq.parquet")
 
 v_conditions = [
@@ -174,9 +175,9 @@ def lin_reg(a_close, a_timestamp, c_close, c_timestamp, e_timestamp):
 # cup_and_handles = nfa_cep(minutely, cup_and_handle_conditions , "timestamp", 7200, by = "symbol")
 
 data = daily_qqq
-conditions = [test_1]
-strategies = [("nfa", nfa_cep), ("interval_nfa", nfa_interval_cep_1), ("interval_vec", vector_interval_cep)]
-span = 7
+conditions = [cup_and_handle_conditions]
+strategies = [("interval_nfa_sqlite", nfa_interval_cep_sqlite), ("interval_vec", vector_interval_cep), ("nfa", nfa_cep) ]
+span = 30
 by = "symbol"
 
 UPPER = 1.01
