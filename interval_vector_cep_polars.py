@@ -1,5 +1,5 @@
 from utils import * 
-import sqlite3
+import duckdb
 
 def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
     
@@ -26,9 +26,6 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
     total_other_time = 0
     counter = 0
 
-    con = sqlite3.connect(":memory:")
-    cur = con.cursor()
-
     for i in range(1, total_events):
         if event_indices[event_names[i]] == None:
             batch = batch.with_columns(polars.lit(True).alias("__possible_{}__".format(event_names[i])))
@@ -50,18 +47,8 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
     length_dicts = {event_name: [] for event_name in event_names}
 
-    cur = cur.execute("create table frame({})".format(", ".join(batch.columns)))
-    cur = cur.execute("CREATE INDEX idx ON frame(__row_count__);")
-    row_count_idx = batch.columns.index("__row_count__")
-
     for partition in partitioned if by is None else tqdm(partitioned):
-
-        # this is expensive!
-        partition_rows = partition.to_dicts()
-        partition_tuples = partition.rows()
-        s = ",".join(["?"] * len(partition_tuples[0]))
-        cur = cur.executemany("insert into frame values({})".format(s), partition_tuples)
-
+        
         if event_indices[event_names[0]] is not None:
             start_rows = partition.select(["__row_count__", time_col]).join(polars.from_dict({"row_nrs": list(event_indices[event_names[0]])}).
                             with_columns(polars.col("row_nrs").cast(polars.UInt32())), left_on = "__row_count__", right_on = "row_nrs", how = "semi")
@@ -77,8 +64,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
             polars.col("__row_count___right").alias("__crc__"),
         ])
         
-        start_row_count = partition_tuples[0][row_count_idx]
-        print(start_row_count, partition_tuples[0])
+        start_row_count = partition["__row_count__"][0]
         for bound in (tqdm(result.to_dicts()) if by is None else result.to_dicts()):
 
             start_nr = bound["__arc__"]
@@ -89,19 +75,12 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
             if start_nr in matched_ends or end_nr <= start_nr:
                 continue
-            my_section = partition_rows[start_nr - start_row_count: end_nr + 1 - start_row_count] #.to_arrow()
-            fate = {event_names[0] + "_" + col : my_section[0][col] for col in partition.columns}
-            stack = deque([(0, [fate], [start_nr])])
-
-            
-
-            # startt = time.time()
-            # inserted = partition_tuples[start_nr - start_row_count: end_nr + 1 - start_row_count]
-            # cur = cur.executemany("insert into frame values({})".format(s), inserted)
-            # overhead += time.time() - startt
+            my_section = partition[start_nr - start_row_count: end_nr + 1 - start_row_count] #.to_arrow()
+            fate = {event_names[0] + "_" + col : my_section[col][0] for col in my_section.columns}
+            stack = deque([(0, my_section[0], [fate], [start_nr])])
             
             while stack:
-                marker, path, matched_event = stack.popleft()
+                marker, vertex, path, matched_event = stack.popleft()
             
                 remaining_df = my_section[marker + 1:]# .to_arrow()
                 next_event_name = event_names[len(path)]
@@ -111,13 +90,13 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
                 for fate in path:
                     for fixed_col in fate:
                         next_event_filter = next_event_filter.replace(fixed_col, str(fate[fixed_col]))
-                
+
                 startt = time.time()
-                query = "select * from frame where __possible_{}__ and {} and __row_count__ > {} and __row_count__ <= {}".format(next_event_name, next_event_filter, start_nr - start_row_count + marker,end_nr - start_row_count)
-                matched = cur.execute(query).fetchall()
+                query = "select {}, {} from frame where __possible_{}__ and {}".format("__row_count__", ",".join(event_required_columns[next_event_name]), next_event_name, next_event_filter)
+                matched = polars.SQLContext(frame=remaining_df).execute(query).collect()
                 total_exec_times.append(time.time() - startt)
                 length_dicts[next_event_name].append(len(remaining_df))
-                
+                startt = time.time()
 
                 # total_exec_times.append(time.time() - startt)
                 total_section_lengths.append(len(remaining_df))
@@ -125,17 +104,15 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
                 if len(matched) > 0:
                     if next_event_name == event_names[-1]:
                         matched_ends.append(start_nr)
-                        matched_events.append(matched_event + [matched[0][row_count_idx]])
+                        matched_events.append(matched_event + [matched["__row_count__"][0]])
                         break
                     else:
-                        for matched_row in matched[::-1]:
-                            my_fate = {next_event_name + "_" + partition.columns[i] : matched_row[i] for i in range(len(partition.columns))}
+                        for matched_row in matched.iter_rows(named = True):
+                            my_fate = {next_event_name + "_" + col : matched_row[col] for col in matched_row}
                             # the row count of the matched row in the section is it's row count col value minus
                             # the start row count of the section
-                            stack.appendleft((matched_row[row_count_idx] - start_nr, path + [my_fate], matched_event + [matched_row[row_count_idx]]))
-
-        
-        cur = cur.execute("delete from frame")    
+                            stack.appendleft((matched_row["__row_count__"] - start_nr, matched_row, path + [my_fate], matched_event + [matched_row["__row_count__"]]))
+                overhead += time.time() - startt
 
     # now create a dataframe from the matched events, first flatten matched_events into a flat list
     if len(matched_events) > 0:
@@ -155,7 +132,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
         
         print("TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts]))
         print("TOTAL FILTERED ROWS: ", sum([np.sum(length_dicts[key]) for key in length_dicts]))
-        print("OVERHEAD", overhead)
+        print(overhead)
         return matched_events
     else:
         return None

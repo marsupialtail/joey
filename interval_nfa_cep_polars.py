@@ -1,4 +1,5 @@
 from utils import * 
+import pickle
 
 def nfa_interval_cep_polars(batch, events, time_col, max_span, by = None, event_udfs = {}):
     
@@ -17,24 +18,38 @@ def nfa_interval_cep_polars(batch, events, time_col, max_span, by = None, event_
     end_results = []
 
     total_filter_time = 0
+    total_filter_times = {event_name: [] for event_name in event_names}
     total_other_time = 0
     counter = 0
 
     partitioned = batch.partition_by(by) if by is not None else [batch]
     length_dicts = {event_name: [] for event_name in event_names}
-    for batch in partitioned if by is None else tqdm(partitioned):
+    for partition in partitioned if by is None else tqdm(partitioned):
 
-        for start_row in tqdm(range(len(batch))) if by is None else range(len(batch)):
-            global_row_count = batch["__row_count__"][start_row]
-            if global_row_count not in event_indices[event_names[0]]:
-                continue
+        partition_rows = partition.to_dicts()
 
-            counter += 1
-            start_time = batch[start_row][time_col]
-            end_time = start_time + max_span
+        if event_indices[event_names[0]] is not None:
+            start_rows = partition.select(["__row_count__", time_col]).join(polars.from_dict({"row_nrs": list(event_indices[event_names[0]])}).
+                            with_columns(polars.col("row_nrs").cast(polars.UInt32())), left_on = "__row_count__", right_on = "row_nrs", how = "semi")
+        else:
+            # likely to be slow, no filter on first event
+            start_rows = partition.select(["__row_count__", time_col])
+        end_times = start_rows.with_columns(polars.col(time_col) + max_span)
+        assert end_times[time_col].is_sorted()
+        # perform as asof join to figure out the end_rows
+        end_rows = end_times.set_sorted(time_col).join_asof(partition.select(["__row_count__", time_col]).set_sorted(time_col), left_on = time_col, right_on = time_col, strategy = "backward")
+        result = end_rows.with_columns([
+            polars.col("__row_count__").alias("__arc__"),
+            polars.col("__row_count___right").alias("__crc__"),
+        ])
+        
+        start_row_count = partition["__row_count__"][0]
+        for bound in (tqdm(result.to_dicts()) if by is None else result.to_dicts()):
 
-            # TODO: replace with static
-            interval = batch.filter((polars.col(time_col) >= start_time) & (polars.col(time_col) <= end_time))
+            start_nr = bound["__arc__"]
+            end_nr = bound["__crc__"]
+            interval = partition[start_nr - start_row_count: end_nr + 1 - start_row_count] #.to_arrow()                        
+
 
             matched_sequences = {i: None for i in range(total_events)}
             matched_sequences[0] = interval[0].rename(rename_dicts[event_names[0]]).select([event_names[0] + "___row_count__"] + [event_names[0] + "_" + k for k in event_required_columns[event_names[0]]])
@@ -58,6 +73,7 @@ def nfa_interval_cep_polars(batch, events, time_col, max_span, by = None, event_
                             "select * from frame where {}".format(predicate)).collect()
                         length_dicts[event_names[seq_len]].append(len(matched_sequences[seq_len - 1]))
                         total_filter_time += time.time() - start
+                        total_filter_times[event_names[seq_len]].append(time.time() - start)
 
                         # now horizontally concatenate your table against the matched
                         if len(matched) > 0:
@@ -82,7 +98,11 @@ def nfa_interval_cep_polars(batch, events, time_col, max_span, by = None, event_
                 if by is None:
                     end_results.append(matched_sequences[total_events - 1])
                 else:
-                    end_results.append(matched_sequences[total_events - 1].with_columns(polars.lit(batch[by][start_row]).alias(by)))
+                    end_results.append(matched_sequences[total_events - 1].with_columns(polars.lit(batch[by][start_nr]).alias(by)))
+
+    # dump total_filter_times dict as pickle
+    with open("total_filter_times.pickle", "wb") as f:
+        pickle.dump(total_filter_times, f)
 
     print("TOTAL FILTER TIME {}".format(total_filter_time))
     for key in length_dicts:

@@ -189,6 +189,9 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
         for udf_required_col in udf_required_columns[event]:
             event_required_columns[event].add(udf_required_col)
 
+    # make sure these columns have a deterministic order  
+    event_required_columns = {event: list(event_required_columns[event]) for event in event_names}
+
     select_cols = touched_columns.union({time_col}) if by is None else touched_columns.union({time_col, by})
     batch = polars.SQLContext(frame=batch).execute("select {} from frame where {}".format(",".join(select_cols), prefilter)).collect()
 

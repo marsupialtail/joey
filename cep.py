@@ -22,7 +22,8 @@ def verify(data, results, conditions):
     all_predicate = sqlglot.parse_one(all_predicate).transform(lambda node: sqlglot.exp.column(node.table + "_" + node.name) if isinstance(node, sqlglot.exp.Column) else node).sql()
 
     if not polars.SQLContext(frame = events).execute("select count(*) from frame where {}".format(all_predicate)).collect()["count"][0] == len(results):
-        polars.SQLContext(frame = events).execute("select * from frame where {}".format(all_predicate)).collect().write_parquet("problem.parquet")
+        print("Verification failed, failed rows written to problem.parquet")
+        polars.SQLContext(frame = events).execute("select * from frame where not ({})".format(all_predicate)).collect().write_parquet("problem.parquet")
 
 # crimes = polars.read_parquet("crimes.parquet")
 # results = nfa_cep(crimes, [('a', "a.primary_category_id = 27"), 
@@ -71,7 +72,7 @@ daily_qqq.write_parquet("processed_daily_qqq.parquet")
 # daily_qqq = daily_qqq.sort(["symbol", "date"])
 # daily_qqq = polars.concat([i.with_row_count("row_count") for i in daily_qqq.partition_by("symbol")]).with_columns(polars.col("row_count").cast(polars.Int64()))
 # daily_qqq = daily_qqq.groupby_rolling("row_count", period = "5i", by = "symbol", check_sorted = False).agg([
-#         polars.col("close").mean().alias("rolling_5d_mean")]).hstack(daily_qqq.select(["close", "high"]))
+#         polars.col("close").mean().alias("rolling_5d_mean")]).hstack(daily_qqq.select(["close", "high", "low"]))
 # daily_qqq = daily_qqq.rename({"row_count": "timestamp"})
 # daily_qqq.write_parquet("david_daily_qqq.parquet")
 
@@ -132,6 +133,13 @@ test_2 = [('x0', 'x0.high < x0.rolling_5d_mean'),
  ('x1', 'x1.high < x1.rolling_5d_mean and x1.timestamp = x0.timestamp + 1'),
  ('x2', 'x2.high > x2.rolling_5d_mean and x2.timestamp = x1.timestamp + 1')]
 
+test_3 = [('x0', 'x0.low > x0.rolling_5d_mean'),
+ ('x1', 'x1.low > x1.rolling_5d_mean and x1.timestamp = x0.timestamp + 1'),
+ ('x2', 'x2.low > x2.rolling_5d_mean and x2.timestamp = x1.timestamp + 1'),
+ ('x3', 'x3.low > x3.rolling_5d_mean and x3.timestamp = x2.timestamp + 1'),
+ ('x4', 'x4.low > x4.rolling_5d_mean and x4.timestamp = x3.timestamp + 1'),
+ ('x5','x5.close < x5.rolling_5d_mean and x5.timestamp = x4.timestamp + 1 and x5.timestamp = 51')]
+
 heads_and_shoulders_conditions = [('a', "a.is_local_top"), # first shoulder
         ('b', """b.is_local_bottom and b.close < a.close * LOWER"""), # first bottom
         ('c', "c.is_local_top and c.close > a.close * UPPER"), # head
@@ -175,8 +183,8 @@ def lin_reg(a_close, a_timestamp, c_close, c_timestamp, e_timestamp):
 # cup_and_handles = nfa_cep(minutely, cup_and_handle_conditions , "timestamp", 7200, by = "symbol")
 
 data = qqq
-conditions = [cup_and_handle_conditions]
-strategies = [("interval_nfa_sqlite", nfa_interval_cep_sqlite), ("interval_vec", vector_interval_cep), ("nfa", nfa_cep) ]
+conditions = [udf_cup_and_handle]
+strategies = [ ("nfa_cep", nfa_cep)]
 span = 7200
 by = None
 
@@ -191,8 +199,8 @@ for condition in conditions:
 
     for strategy_name, strategy in strategies:
         print("USING STRATEGY {}".format(strategy_name))
-        results = strategy(data, condition, "timestamp", span, by=  by)
-        print(results)
+        results = strategy(data, condition, "timestamp", span, by= by)
+        # print(results)
 
         if by is not None:
             results.unique([condition[0][0] + "_timestamp", by]).sort(by).write_parquet(strategy_name + ".parquet")
