@@ -5,7 +5,7 @@ import time
 
 n_rows_choices = [1,10,100,1000,10000,100000]
 n_cols = 30
-n_select_choices = [1,2,4,8,16]
+n_select_choices = [2,4,8]
 times = {}
 con = sqlite3.connect(":memory:")
 cur = con.cursor()
@@ -25,10 +25,15 @@ for n_rows in n_rows_choices:
             cur.execute("INSERT INTO test VALUES {}".format(row))
 
         runtime = time.time() - start
-        # print("INSERT TIME", n_rows, n_select, runtime)
         selected_cols = ",".join(["col_{}".format(i) for i in range(n_select)])
 
-        predicate = " and ".join(["col_{} > 500".format(i) for i in range(n_select)])
+        # predicate = " and ".join(["col_{} > 500".format(i) for i in range(n_select)])
+        if n_select == 8:
+            predicate = "col_7 > 10 and col_3 < col_2 * 2 and col_6 > (col_5 - col_4) / (col_3 - col_1) * (col_2 - col_1) + col_0"
+        elif n_select == 4:
+            predicate = "col_0 < 10 and 1 > (col_2 - col_0) / (col_3 - col_1) "
+        elif n_select == 2:
+            predicate = "col_0 < col_1"
         start = time.time()
         for i in range(1000):
             result = cur.execute("select {} from test where {}".format(selected_cols, predicate)).fetchall()

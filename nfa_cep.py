@@ -11,7 +11,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
     else:
         assert by in batch.columns
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
 
     total_events = len(events)
 
@@ -49,7 +49,10 @@ def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
 
         partition_rows = partition.to_dicts()
 
-        for row in tqdm(partition_rows):
+        for seq_len in range(1, total_events):
+            cur = cur.execute("delete from matched_sequences_{} ".format(seq_len - 1))
+
+        for row in tqdm(partition_rows) if by is None else partition_rows:
             global_row_count = row["__row_count__"]
             this_row_can_be = [i for i in range(1, total_events) if event_indices[event_names[i]] is None or global_row_count in event_indices[event_names[i]]]
 

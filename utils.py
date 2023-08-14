@@ -9,6 +9,29 @@ import time
 from functools import partial
 import numpy as np
 
+def verify(data, results, conditions):
+    # the results should have event_name__row_count__ column
+
+    prefilter, touched_columns, event_prefilters, event_predicates, event_required_columns = preprocess_conditions(conditions)
+    data = polars.SQLContext(frame=data).execute("select * from frame where {}".format(prefilter)).collect()
+
+    all_predicate = ""
+    events = []
+    for condition in conditions:
+        event_name, predicate = condition
+        if predicate is not None:
+            all_predicate += "({}) and ".format(predicate)
+        event_nrs = results[event_name + "___row_count__"].to_list()
+        events.append(data[event_nrs].rename({col : event_name + "_" + col for col in data[event_nrs].columns}))
+    
+    events = polars.concat(events, how = "horizontal")
+
+    all_predicate = all_predicate[:-5]
+    all_predicate = sqlglot.parse_one(all_predicate).transform(lambda node: sqlglot.exp.column(node.table + "_" + node.name) if isinstance(node, sqlglot.exp.Column) else node).sql()
+    if not polars.SQLContext(frame = events).execute("select count(*) from frame where {}".format(all_predicate)).collect()["count"][0] == len(results):
+        print("Verification failed, failed rows written to problem.parquet")
+        polars.SQLContext(frame = events).execute("select * from frame where not ({})".format(all_predicate)).collect().write_parquet("problem.parquet")
+
 def plot_candlesticks(prices):
     import matplotlib.pyplot as plt
     prices = prices.to_pandas()
@@ -144,6 +167,8 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
             raise Exception("UDF names are case insensitive. You cannot define both LIN_REG and lin_reg for example.")
         udf_set.add(udf.lower())
 
+    # preprocess UDFs
+
     event_udfs = {event: [] for event in event_names}
     for event in event_predicates:
         predicate = event_predicates[event]
@@ -193,6 +218,9 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
     event_required_columns = {event: list(event_required_columns[event]) for event in event_names}
 
     select_cols = touched_columns.union({time_col}) if by is None else touched_columns.union({time_col, by})
+
+    # apply prefilter
+
     batch = polars.SQLContext(frame=batch).execute("select {} from frame where {}".format(",".join(select_cols), prefilter)).collect()
 
     batch = batch.with_row_count("__row_count__")
@@ -204,11 +232,14 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
     
     # we need to rename the predicates to use _ instead of . because polars doesn't support . in column names
     event_predicates = [replace_with_dict(predicate, event_rename_dicts[event]) if (predicate is not None and predicate != 'TRUE') else None for event, predicate in event_predicates.items()]
-    print(event_predicates)
+    # print(event_prefilters)
+    # print(event_predicates)
     rename_dicts = {event: {col: event + "_" + col for col in batch.columns} for event in event_names}
     
     assert (event_predicates[0] == "TRUE" or event_predicates[0] == None) and all([predicate is not None for predicate in event_predicates[1:]]), \
         "only first event can be None"  
+
+    # compute event indices.
 
     event_indices = {event_name: None for event_name in event_names}
     for event_name in event_names:
@@ -235,5 +266,23 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
         if event_prefilters[event_name] != "TRUE":
             event_indices[event_name] = set(event_indices[event_name]["__row_count__"])
         
-    print(len(event_indices[event_names[0]]))
-    return batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs
+    # print(len(event_indices[event_names[0]]))
+
+    # compute intervals
+    if event_indices[event_names[0]] is not None:
+        start_rows = batch.select(["__row_count__", time_col]+ ([by] if by is not None else [])).join(polars.from_dict({"row_nrs": list(event_indices[event_names[0]])}).
+                            with_columns(polars.col("row_nrs").cast(polars.UInt32())), left_on = "__row_count__", right_on = "row_nrs", how = "semi")
+    else:
+        # likely to be slow, no filter on first event
+        start_rows = batch.select(["__row_count__", time_col])
+    end_times = start_rows.with_columns(polars.col(time_col) + max_span)
+    # perform as asof join to figure out the end_rows
+    end_rows = end_times.set_sorted(time_col).\
+        join_asof(batch.select(["__row_count__", time_col] + ([by] if by is not None else [])).set_sorted(time_col), 
+                  left_on = time_col, right_on = time_col, strategy = "backward", by = by)
+    intervals = end_rows.with_columns([
+        polars.col("__row_count__").alias("__arc__"),
+        polars.col("__row_count___right").alias("__crc__"),
+    ])
+    
+    return batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs, intervals
