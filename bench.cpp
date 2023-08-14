@@ -4,7 +4,10 @@
 #include <chrono>
 
 #define REPEATS 1000
-#define T 900
+#define T 800
+#define T2 800
+#define T3 800
+#define T4 800
 
 int main(int argc, char** argv) {
     
@@ -17,15 +20,15 @@ int main(int argc, char** argv) {
     );
 
     functions.push_back(
-        [](int* x) { return ((x[0] > T) & (x[1] > T)); }
+        [](int* x) { return ((x[0] > T2) & (x[1] > T2)); }
     );
 
     functions.push_back(
-        [](int* x) { return ((x[0] > T) & (x[1] > T) & (x[2] > T) & (x[3] > T)); }
+        [](int* x) { return ((x[0] > T3) & (x[1] > T3) & (x[2] > T3) & (x[3] > T3)); }
     );
 
     functions.push_back(
-        [](int* x) { return ((x[0] > T) & (x[1] > T) & (x[2] > T) & (x[3] > T) & (x[4] > T) & (x[5] > T) & (x[6] > T) & (x[7] > T)); }
+        [](int* x) { return ((x[0] > T4) & (x[1] > T4) & (x[2] > T4) & (x[3] > T4) & (x[4] > T4) & (x[5] > T4) & (x[6] > T4) & (x[7] > T4)); }
     );
 
     // functions.push_back(
@@ -48,21 +51,24 @@ int main(int argc, char** argv) {
         v[i] = rand() % 1000;
     }
 
+
+    
     for (int n_row : n_rows) {
-        
+                
+        int counter = 1;
+
 
         for (auto filter : functions) {
-
-	    std::vector<int> my_rows = {};
-            for(int i = 0; i < REPEATS; i++){
-                int my_row = rand() % (10 * n_rows.back()); // do not always do the same portion to simulate cold cache or less tha ndesirable caching
-		my_rows.push_back(my_row);
-	    }
-
+    		std::vector<int> my_rows = {};
+    		for(int i = 0; i < REPEATS; i++){
+    		    int my_row = rand() % (10 * n_rows.back() - n_rows.back()); // do not always do the same portion to simulate cold cache or less tha ndesirable caching
+    		    my_rows.push_back(my_row);
+    		}
             auto start_time = std::chrono::high_resolution_clock::now();
 
+            std::vector<int> results = {};
             for(int i = 0; i < REPEATS; i++){
-                std::vector<int> results = {};
+		results.clear();
            	int my_row = my_rows[i];
                 for(int row = my_row; row <my_row + n_row; row ++) {
                     int * col = v.data() + (row * n_cols);
@@ -74,7 +80,7 @@ int main(int argc, char** argv) {
             
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
-            std::cout << "n_row: " << n_row << " duration (us): " << duration << " filter: " << filter.target_type().name() << std::endl;
+            std::cout << "(" << n_row << "," << counter ++ << "," << results.size() << "," <<  duration << ")," << std::endl;
         }
     }
 }
