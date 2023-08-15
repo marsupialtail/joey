@@ -1,0 +1,1 @@
+g++ bench-sqlite.cpp -o bench-sqlite -lsqlite3 -O3 -std=c++11
