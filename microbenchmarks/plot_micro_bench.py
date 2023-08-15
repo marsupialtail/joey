@@ -26,13 +26,23 @@ def plot_micro_bench(df: pd.DataFrame, output_filename: str):
             df[df.num_select == num_select].groupby(["num_row"])["runtime"].mean()
         )
         print(df_group)
-        df_group.plot(
+        plots = df_group.plot(
             x="num_row",
             y="runtime",
             ax=axes[i],
             kind="bar",
             title="num_select={}".format(num_select),
         )
+        for bar in plots.patches:
+            plots.annotate(
+                format(bar.get_height(), ".4f"),
+                (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                ha="center",
+                va="center",
+                size=8,
+                xytext=(0, 8),
+                textcoords="offset points",
+            )
         axes[i].set_yscale("log", base=10)
     plt.savefig(output_filename, bbox_inches="tight")
 
