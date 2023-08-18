@@ -1,12 +1,13 @@
 from nfa_cep import nfa_cep
 from interval_nfa_cep import nfa_interval_cep
 from interval_vector_cep import vector_interval_cep
+from interval_nfa_cep_c import nfa_interval_cep_c
 import sqlglot
 import polars
 from utils import verify
 from technical_indicators import *
 
-def evaluate(data, conditions, strategies, span, by = None, replace_dict = {}):
+def evaluate(data, conditions, strategies, span, by = None, time_col = "timestamp", replace_dict = {}):
     """
 
     Look up some example use cases of this function in this file.
@@ -28,9 +29,9 @@ def evaluate(data, conditions, strategies, span, by = None, replace_dict = {}):
         for strategy_name, strategy in strategies:
             print("USING STRATEGY {}".format(strategy_name))
             if by is None:
-                results = strategy(data, condition, "timestamp", span, by= by).unique([condition[0][0] + "_timestamp"]).sort(condition[0][0] + "_timestamp")
+                results = strategy(data, condition, time_col, span, by= by).unique([condition[0][0] + "_" + time_col]).sort(condition[0][0] + "_" + time_col)
             else:
-                results = strategy(data, condition, "timestamp", span, by= by).unique([condition[0][0] + "_timestamp", by]).sort(by)
+                results = strategy(data, condition, time_col, span, by= by).unique([condition[0][0] + "_" + time_col, by]).sort(by)
             
             # make sure that all strategies return the same length at least
             if results is None:
@@ -79,7 +80,7 @@ def do_qqq_test():
                     (polars.col("close") == polars.col("max_close")).alias("is_local_top")])
 
     conditions = [ascending_triangles_conditions, v_conditions, cup_and_handle_conditions, heads_and_shoulders_conditions, flag_1]
-    strategies = [("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
+    strategies = [("test", nfa_interval_cep_c), ("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
     span = 7200
     by = None
     UPPER = 1.0025
@@ -119,18 +120,31 @@ def do_daily_qqq_test():
 
 def do_minutely_test():
 
-    minutely = polars.read_parquet("filtered_combined.parquet")
+    minutely = polars.read_parquet("data/filtered_combined.parquet")
 
     conditions = [ascending_triangles_conditions, cup_and_handle_conditions, heads_and_shoulders_conditions, flag_1]
-    strategies = [("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
-    span = 60
-    by = None
+    strategies = [("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
+    span = 7200
+    by = "symbol"
     UPPER = 1.0025
     LOWER = 0.9975
 
     evaluate(minutely, conditions, strategies, span, by = by, replace_dict = {"UPPER": UPPER, "LOWER": LOWER})
 
+def hard_test():
+    data = polars.read_parquet("data/testing.parquet")
+    conditions = [[('x0', 'x0.Low > x0.rolling_5d_mean'),
+        ('x1', 'x1.Low > x1.rolling_5d_mean and x1.date_ix = x0.date_ix + 1'),
+        ('x2', 'x2.Low > x2.rolling_5d_mean and x2.date_ix = x1.date_ix + 1'),
+        ('x3', 'x3.Low > x3.rolling_5d_mean and x3.date_ix = x2.date_ix + 1'),
+        ('x4', 'x4.Low > x4.rolling_5d_mean and x4.date_ix = x3.date_ix + 1'),
+        ('x5','x5.Close < x5.rolling_5d_mean and x5.date_ix = x4.date_ix + 1 and x5.date_ix = 51')]]
+    
+    strategies = [("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
+
+    evaluate(data, conditions, strategies, 6, by = "ID_ZZ", time_col = "date_ix")
 
 do_qqq_test()
-do_daily_qqq_test()
+# do_daily_qqq_test()
 # do_minutely_test()
+# hard_test()

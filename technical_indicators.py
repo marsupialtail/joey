@@ -44,6 +44,24 @@ flag_1 = [('a', "a.is_local_top"), # first top
         ('f', """f.close < d.close * LOWER""") #breakout support
     ]
 
+test_1 = [('x0', 'x0.high < x0.rolling_5d_mean'),
+ ('x1', 'x1.high < x1.rolling_5d_mean and x1.timestamp = x0.timestamp + 1'),
+ ('x2', 'x2.high < x2.rolling_5d_mean and x2.timestamp = x1.timestamp + 1'),
+ ('x3', 'x3.high < x3.rolling_5d_mean and x3.timestamp = x2.timestamp + 1'),
+ ('x4', 'x4.high < x4.rolling_5d_mean and x4.timestamp = x3.timestamp + 1'),
+ ('x5','x5.high > x5.rolling_5d_mean and x5.timestamp = x4.timestamp + 1 and x5.timestamp = 41')]
+
+test_2 = [('x0', 'x0.high < x0.rolling_5d_mean'),
+ ('x1', 'x1.high < x1.rolling_5d_mean and x1.timestamp = x0.timestamp + 1'),
+ ('x2', 'x2.high > x2.rolling_5d_mean and x2.timestamp = x1.timestamp + 1')]
+
+test_3 = [('x0', 'x0.low > x0.rolling_5d_mean'),
+ ('x1', 'x1.low > x1.rolling_5d_mean and x1.timestamp = x0.timestamp + 1'),
+ ('x2', 'x2.low > x2.rolling_5d_mean and x2.timestamp = x1.timestamp + 1'),
+ ('x3', 'x3.low > x3.rolling_5d_mean and x3.timestamp = x2.timestamp + 1'),
+ ('x4', 'x4.low > x4.rolling_5d_mean and x4.timestamp = x3.timestamp + 1'),
+ ('x5','x5.close < x5.rolling_5d_mean and x5.timestamp = x4.timestamp + 1 and x5.timestamp = 51')]
+
 heads_and_shoulders_conditions = [('a', "a.is_local_top"), # first shoulder
         ('b', """b.is_local_bottom and b.close < a.close * LOWER"""), # first bottom
         ('c', "c.is_local_top and c.close > a.close * UPPER"), # head

@@ -24,18 +24,16 @@ def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = 
     total_other_time = 0
     counter = 0
 
-    con = sqlite3.connect(":memory:")
-    cur = con.cursor()
-
-    # cur = duckdb.connect()
-
     partitioned = batch.partition_by(by, as_dict = True) if by is not None else {"dummy":batch}
     length_dicts = {event_name: [] for event_name in event_names}
+
+    con = sqlite3.connect(":memory:")
+    cur = con.cursor()
 
     current_cols = []
     for event in range(total_events - 1):
         event_name = event_names[event]
-        current_cols += [event_name + "___row_count__"] + [event_name + "_" + k for k in event_required_columns[event_name]]
+        current_cols += [event_name + "_" + k for k in event_required_columns[event_name]]
         cur = cur.execute("create table matched_sequences_{}({})".format(event, ", ".join(current_cols)))
 
     # get the indices of row count cols in current_cols
@@ -57,7 +55,7 @@ def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = 
             end_nr = bound["__crc__"]
 
             interval = partition_rows[start_nr - start_row_count: end_nr + 1 - start_row_count] #.to_arrow()                        
-            val = ",".join([str(interval[0]["__row_count__"])] + [str(interval[0][k]) for k in event_required_columns[event_names[0]]])
+            val = ",".join([str(interval[0][k]) for k in event_required_columns[event_names[0]]])
             cur = cur.execute("insert into matched_sequences_0 values ({})".format(val))
 
             empty = {seq_len: True for seq_len in range(1, total_events)}
@@ -96,7 +94,7 @@ def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = 
                             early_exit = True
                             break
                         else:
-                            val = tuple([interval[row]["__row_count__"]] + [interval[row][k] for k in event_required_columns[event_names[seq_len]]])
+                            val = tuple([interval[row][k] for k in event_required_columns[event_names[seq_len]]])
                             matched = [row + val for row in matched]
                             # print(matched)
                             s = ",".join(["?"] * len(matched[0]))

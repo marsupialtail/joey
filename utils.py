@@ -215,7 +215,7 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
             event_required_columns[event].add(udf_required_col)
 
     # make sure these columns have a deterministic order  
-    event_required_columns = {event: list(event_required_columns[event]) for event in event_names}
+    event_required_columns = {event: ["__row_count__"] + list(event_required_columns[event]) for event in event_names}
 
     select_cols = touched_columns.union({time_col}) if by is None else touched_columns.union({time_col, by})
 
@@ -274,7 +274,7 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
                             with_columns(polars.col("row_nrs").cast(polars.UInt32())), left_on = "__row_count__", right_on = "row_nrs", how = "semi")
     else:
         # likely to be slow, no filter on first event
-        start_rows = batch.select(["__row_count__", time_col])
+        start_rows = batch.select(["__row_count__", time_col]+ ([by] if by is not None else []))
     end_times = start_rows.with_columns(polars.col(time_col) + max_span)
     # perform as asof join to figure out the end_rows
     end_rows = end_times.set_sorted(time_col).\

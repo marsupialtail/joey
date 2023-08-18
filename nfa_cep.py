@@ -35,7 +35,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
 
     for event in range(total_events - 1):
         event_name = event_names[event]
-        current_cols += [event_name + "___row_count__"] + [event_name + "_" + k for k in event_required_columns[event_name]]
+        current_cols += [event_name + "_" + k for k in event_required_columns[event_name]]
         schemas[event_names[event]] = current_cols
         cur = cur.execute("create table matched_sequences_{}({})".format(event, ", ".join(current_cols)))
         cur = cur.execute("CREATE INDEX idx_{} ON matched_sequences_{}({});".format(event, event, event_names[0] + "_" + time_col))
@@ -111,7 +111,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
                         # for event in range(total_events - 1):
                         #     cur = cur.execute("delete from matched_sequences_{} where {} = {}".format(event, event_names[0] + "___row_count__", row_counts[0] ))
                     else:
-                        val = tuple([row["__row_count__"]] + [row[k] for k in event_required_columns[event_names[seq_len]]])
+                        val = tuple([row[k] for k in event_required_columns[event_names[seq_len]]])
                         matched = [row + val for row in matched]
                         # print(matched)
                         s = ",".join(["?"] * len(matched[0]))
@@ -119,7 +119,7 @@ def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
                         empty[seq_len] = False
 
             if event_indices[event_names[0]] is None or global_row_count in event_indices[event_names[0]]:
-                val = ",".join([str(row["__row_count__"])] + [str(row[k]) for k in event_required_columns[event_names[0]]])
+                val = ",".join([str(row[k]) for k in event_required_columns[event_names[0]]])
                 cur = cur.execute("insert into matched_sequences_0 values ({})".format(val))
                 empty[0] = False
         
