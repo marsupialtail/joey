@@ -24,6 +24,14 @@
 #include "arrow/util/checked_cast.h"
 #include <sqlite3.h>
 #include <arrow/table.h>
+#include <cctype>  // for std::toupper
+
+std::string to_upper(const std::string& input) {
+    std::string result = input;
+    std::transform(result.begin(), result.end(), result.begin(),
+        [](unsigned char c) { return std::toupper(c); });
+    return result;
+}
 
 #define SQLITE_PREPARE_AND_CHECK(db, sql, stmt)               \
     do {                                                      \
@@ -174,6 +182,60 @@ void AppendValues(BuilderType* builder, const std::vector<T>& values,
 //std::vector<int64_t> f0_values = {0, 1, 2, 3};
 //std::vector<bool> is_valid = {true, true, true, true};
 //AppendValues<arrow::Int64Builder, int64_t>(&b0, f0_values, is_valid);
+
+void bind_scalar_to_stmt(sqlite3_stmt* stmt, int j, std::string item, std::shared_ptr<arrow::DataType> type){
+    switch(type->id()) {
+        case arrow::Type::BOOL: {
+            sqlite3_bind_int(stmt, j, std::stoi(item));
+            break;
+        }
+
+        case arrow::Type::DOUBLE: {
+            sqlite3_bind_double(stmt, j, std::stod(item));
+            break;
+        }
+
+        case arrow::Type::FLOAT: {
+            sqlite3_bind_double(stmt, j, std::stof(item));
+            break;
+        }
+
+        case arrow::Type::INT64: {
+            sqlite3_bind_int64(stmt, j, std::stoll(item));
+            break;
+        }
+
+        case arrow::Type::INT32: {
+            sqlite3_bind_int(stmt, j, std::stoi(item));
+            break;
+        }
+
+        case arrow::Type::UINT64: {
+            sqlite3_bind_int64(stmt, j, std::stoull(item));
+            break;
+        }
+
+        case arrow::Type::UINT32: {
+            sqlite3_bind_int(stmt, j, std::stoi(item));
+            break;
+        }
+
+        case arrow::Type::STRING: {
+            sqlite3_bind_text(stmt, j, item.c_str(), -1, SQLITE_TRANSIENT);
+            break;
+        }
+
+        case arrow::Type::LARGE_STRING: {
+            sqlite3_bind_text(stmt, j, item.c_str(), -1, SQLITE_TRANSIENT);
+            break;
+        }
+
+        default: {
+            std::cout << "Unsupported type " << type->ToString() << std::endl;
+            exit(1);
+        }
+    }
+}
 
 void bind_row_to_sqlite(sqlite3* db, sqlite3_stmt* stmt, std::shared_ptr<arrow::RecordBatch> batch, int row, std::vector<std::string> column_names, int offset = -1) {
     int rc;

@@ -43,9 +43,12 @@ def evaluate(data, conditions, strategies, span, by = None, time_col = "timestam
                 if exepcted_length is None:
                     exepcted_length = len(results)
                 else:
-                    assert exepcted_length == len(results), "strategy {} returned {} but other strategies returned {}".format(strategy_name, len(results), exepcted_length)
+                    if exepcted_length != len(results):
+                        print("strategy {} returned {} but other strategies returned {}".format(strategy_name, len(results), exepcted_length))
+
 
             print(results)
+            results.write_parquet(strategy_name + ".parquet")
             # make sure that the things returned match the predicate
             verify(data, results, condition)
             

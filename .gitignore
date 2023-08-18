@@ -1,5 +1,7 @@
 __pycache__
-.parquet
+*.parquet
 .env
 .idea
 .DS_Store
+*.o
+*.so

@@ -38,26 +38,33 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
     std::vector<sqlite3_stmt*> insert_stmts (event_names.size() - 1);
     std::vector<sqlite3_stmt*> filter_stmts (event_names.size() - 1);
     std::vector<std::string> current_cols = {};
+    std::vector<std::shared_ptr<arrow::DataType>> types = {};
     std::vector<int> offsets = {0};
+
+    std::shared_ptr<arrow::Schema> schema = batch->schema();
+    int num_fields = schema->num_fields();
+
+
     for (int event = 0; event < event_names.size() - 1; event++) {
         std::string event_name = event_names[event];
         for (int i = 0; i < event_required_columns[event_name].size(); i++) {
             current_cols.push_back(event_name + "_" + event_required_columns[event_name][i]);
+            types.push_back(schema->GetFieldByName(event_required_columns[event_name][i])->type());
         }
         offsets.push_back(offsets.back() + current_cols.size());
         std::string sql = "CREATE TABLE matched_sequences_" + std::to_string(event) + " (";
         for (int i = 0; i < current_cols.size(); i++) {
-            sql += current_cols[i] + " NUMERIC, ";
+            sql += current_cols[i] + " " + to_upper(types[i]->ToString()) + ", ";
         }
         sql = sql.substr(0, sql.size() - 2);
         sql += ");";
-        std::cout << sql << std::endl;
+        // std::cout << sql << std::endl;
         SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
 
         // cur = cur.execute("CREATE INDEX idx_{} ON matched_sequences_{}({});".format(event, event, event_names[0] + "_" + time_col))
     
         sql = "CREATE INDEX idx_" + std::to_string(event) + " ON matched_sequences_" + std::to_string(event) + "(" + event_names[0] + "_" + time_col +  ");";
-        std::cout << sql << std::endl;
+        // std::cout << sql << std::endl;
         SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
 
     }
@@ -77,7 +84,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
             }
             sql = sql.substr(0, sql.size() - 2);
             sql += ");";
-            std::cout << sql << std::endl;
+            // std::cout << sql << std::endl;
             SQLITE_PREPARE_AND_CHECK(db, sql, insert_stmts[event]);
         }
 
@@ -85,7 +92,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         if (event > 0){
             std::string predicate = event_predicates[event];
             std::string sql = "SELECT * FROM matched_sequences_" + std::to_string(event - 1) + " WHERE " + predicate + ";";
-            std::cout << sql << std::endl;
+            // std::cout << sql << std::endl;
             SQLITE_PREPARE_AND_CHECK(db, sql, filter_stmts[event - 1]);
         }
     }
@@ -96,23 +103,6 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         empty[event] = true;
     }
     
-
-    std::string sql = "SELECT * FROM matched_sequences_0 LIMIT 1;";
-    rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0);
-    if (rc != SQLITE_OK) {
-        std::cerr << "Cannot prepare statement: " << sqlite3_errmsg(db) << std::endl;
-        sqlite3_close(db);
-        exit(1);
-    }
-
-    // Execute the SQL statement and print results
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        for (int col = 0; col < sqlite3_column_count(stmt); col++) {
-            std::cout << sqlite3_column_text(stmt, col) << " ";
-        }
-        std::cout << std::endl;
-    }
-
     size_t num_rows = batch->num_rows();
     size_t total_matched = 0;
     std::vector<std::vector<size_t>> matched_row_counts = {};
@@ -164,19 +154,21 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
             if (matched.size() > 0) {
                 if (seq_len == event_names.size() - 1) {
                     
-                    std::vector<size_t> row_counts = {};
-                    for(int i = 0; i < row_count_idx.size(); i++) {
-                        row_counts.push_back(std::stoul(matched[0][row_count_idx[i]]));
+                    for (std::vector<std::string> & matched_row : matched) {
+                        std::vector<size_t> row_counts = {};
+                        for(int i = 0; i < row_count_idx.size(); i++) {
+                            row_counts.push_back(std::stoul(matched_row[row_count_idx[i]]));
+                        }
+                        row_counts.push_back(global_row_count);
+                        matched_row_counts.push_back(row_counts);
                     }
-                    row_counts.push_back(global_row_count);
-                    matched_row_counts.push_back(row_counts);
                     early_exit = true;
                     break;
                 } else {
                     for (std::vector<std::string> & matched_row : matched) {
                         int j = 0;
                         for(std::string & item : matched_row){
-                            sqlite3_bind_text(insert_stmts[seq_len], j + 1, item.c_str(), -1, SQLITE_TRANSIENT);
+                            bind_scalar_to_stmt(insert_stmts[seq_len], j + 1, item, types[j]);
                             j += 1;
                         }
                         bind_row_to_sqlite(db, insert_stmts[seq_len], batch, row, event_required_columns[event_names[seq_len]], matched_row.size() - 1);

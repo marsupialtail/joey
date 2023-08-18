@@ -92,7 +92,6 @@ def nfa_interval_cep_c(batch, events, time_col, max_span, by = None, event_udfs 
             all_col_names = []
             for col in possible_cols:
                 cols_indices = [m.start() for m in re.finditer(event_names[i] + "_" + col, event_predicates[i])]
-                print(cols_indices, event_predicates[i])
                 all_col_indices.extend(cols_indices)
                 all_col_names.extend([col] * len(cols_indices))
             
@@ -108,7 +107,7 @@ def nfa_interval_cep_c(batch, events, time_col, max_span, by = None, event_udfs 
     event_independent_columns_c, num_events = pack_dict(event_independent_columns)
     event_predicates_c = (ctypes.c_char_p * len(event_predicates))(*[s.encode('utf-8') if s is not None else "None".encode("utf-8") for s in event_predicates ])
     event_indices_c, num_indices = pack_dict2(event_indices)
-    print(event_required_columns)
+
     data = lib.MyFunction(data, data, event_required_columns_c, event_independent_columns_c, event_predicates_c, event_indices_c, num_events, num_indices, time_col.encode('utf-8'))
 
     matched_events = []
