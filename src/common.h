@@ -25,6 +25,7 @@
 #include <sqlite3.h>
 #include <arrow/table.h>
 #include <cctype>  // for std::toupper
+#include <chrono>
 
 std::string to_upper(const std::string& input) {
     std::string result = input;
@@ -239,11 +240,6 @@ void bind_scalar_to_stmt(sqlite3_stmt* stmt, int j, std::string item, std::share
 
 void bind_row_to_sqlite(sqlite3* db, sqlite3_stmt* stmt, std::shared_ptr<arrow::RecordBatch> batch, int row, std::vector<std::string> column_names, int offset = -1) {
     int rc;
-    int num_rows = batch->num_rows();
-    assert(start >= 0 && start < end); 
-    assert(end >= 0 && end <= num_rows);
-    std::shared_ptr<arrow::Schema> schema = batch->schema();
-    int num_fields = schema->num_fields();
 
     // std::cout << schema->ToString() << std::endl;
     
@@ -278,6 +274,7 @@ void bind_row_to_sqlite(sqlite3* db, sqlite3_stmt* stmt, std::shared_ptr<arrow::
 
             case arrow::Type::FLOAT: {
                 std::shared_ptr<arrow::FloatArray> array = std::static_pointer_cast<arrow::FloatArray>(array1);
+                rc = sqlite3_bind_double(stmt, j + 1, (float)array->Value(i));
                 if (array->IsValid(i)) {
                     rc = sqlite3_bind_double(stmt, j + 1, (float)array->Value(i));
 
@@ -355,5 +352,138 @@ void bind_row_to_sqlite(sqlite3* db, sqlite3_stmt* stmt, std::shared_ptr<arrow::
             }
         }
     }
+    
+}
+
+std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arrow::RecordBatch> batch) {
+
+    auto num_rows = batch->num_rows();
+    auto num_columns = batch->num_columns();
+
+    std::vector<std::vector<std::string>> result(num_rows, std::vector<std::string>(num_columns));
+    
+    for (int row = 0; row < num_rows; row++) {
+        for (int j = 0; j < num_columns; j++) {
+
+            int i = row;
+            std::shared_ptr<arrow::Array> array1 = batch->column(j);
+            std::shared_ptr<arrow::DataType> type = array1->type();
+
+            switch(type->id()) {
+                case arrow::Type::BOOL: {
+                    std::shared_ptr<arrow::BooleanArray> array = std::static_pointer_cast<arrow::BooleanArray>(array1);
+                    if (array->IsValid(i)) {
+                        result[row][j] = (array->Value(i) ? "true" : "false");
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+                case arrow::Type::DOUBLE: {
+                    std::shared_ptr<arrow::DoubleArray> array = std::static_pointer_cast<arrow::DoubleArray>(array1);
+                    if (array->IsValid(i)) {
+                        result[row][j] = std::to_string(array->Value(i));
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+                case arrow::Type::FLOAT: {
+                    std::shared_ptr<arrow::FloatArray> array = std::static_pointer_cast<arrow::FloatArray>(array1);
+                    if (array->IsValid(i)) {
+                        result[row][j] = std::to_string((float)array->Value(i));
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+                case arrow::Type::INT64: {
+                    std::shared_ptr<arrow::Int64Array> array = std::static_pointer_cast<arrow::Int64Array>(array1);
+                    if (array->IsValid(i)) {
+                        result[row][j] = std::to_string(array->Value(i));
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+                case arrow::Type::INT32: {
+                    std::shared_ptr<arrow::Int32Array> array = std::static_pointer_cast<arrow::Int32Array>(array1);
+                    if (array->IsValid(i)) {
+                        result[row][j] = std::to_string(array->Value(i));
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+                case arrow::Type::UINT64: {
+                    std::shared_ptr<arrow::UInt64Array> array = std::static_pointer_cast<arrow::UInt64Array>(array1);
+                    if (array->IsValid(i)) {
+                        result[row][j] = std::to_string(array->Value(i));
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+                case arrow::Type::UINT32: {
+                    std::shared_ptr<arrow::UInt32Array> array = std::static_pointer_cast<arrow::UInt32Array>(array1);
+                    if (array->IsValid(i)) {
+                        result[row][j] = std::to_string(array->Value(i));
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+                case arrow::Type::STRING: {
+                    std::shared_ptr<arrow::StringArray> array = std::static_pointer_cast<arrow::StringArray>(array1);
+
+                    if (array->IsValid(i)) {
+                        result[row][j] = array->GetString(i);
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+
+                case arrow::Type::LARGE_STRING: {
+                    std::shared_ptr<arrow::LargeStringArray> array = std::static_pointer_cast<arrow::LargeStringArray>(array1);
+
+                    if (array->IsValid(i)) {
+                        result[row][j] = array->GetString(i);
+                    } else {
+                        std::cout << "does not support null values" << std::endl;
+                        exit(1);
+                    }
+                    break;
+                }
+
+                default: {
+                    std::cout << "Unsupported type " << type->ToString() << std::endl;
+                    exit(1);
+                }
+
+                
+
+                
+            }
+        }
+    }
+
+    return result;
     
 }

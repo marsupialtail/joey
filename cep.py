@@ -83,7 +83,8 @@ def do_qqq_test():
                     (polars.col("close") == polars.col("max_close")).alias("is_local_top")])
 
     conditions = [ascending_triangles_conditions, v_conditions, cup_and_handle_conditions, heads_and_shoulders_conditions, flag_1]
-    strategies = [("test", nfa_interval_cep_c), ("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
+    # strategies = [("test", nfa_interval_cep_c), ("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
+    strategies = [("test", nfa_interval_cep_c)]
     span = 7200
     by = None
     UPPER = 1.0025

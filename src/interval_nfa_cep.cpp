@@ -22,6 +22,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
 	arrow::Result<std::shared_ptr<arrow::Table>> result2 = arrow::py::unwrap_table(obj2);
     assert(result1.ok());
     assert(result2.ok());
+    std::vector<std::string> column_names = result1.ValueOrDie()->ColumnNames();
 	std::shared_ptr<arrow::RecordBatch> batch = result1.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
 	std::shared_ptr<arrow::RecordBatch> intervals = result2.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
 
@@ -44,17 +45,34 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
     std::shared_ptr<arrow::Schema> schema = batch->schema();
     int num_fields = schema->num_fields();
 
+    std::map<std::string, std::vector<int>> event_independent_column_pos;
+    std::map<std::string, std::vector<std::shared_ptr<arrow::DataType>>> event_independent_column_types;
+
+    for (int event = 0; event < event_names.size(); event ++) {
+        std::string event_name = event_names[event];
+        std::vector<int> pos = {};
+        std::vector<std::shared_ptr<arrow::DataType>> this_types = {};
+
+        for (int i = 0; i < event_independent_columns[event_name].size(); i++) {
+            pos.push_back(schema->GetFieldIndex(event_independent_columns[event_name][i]));
+            this_types.push_back(schema->GetFieldByName(event_independent_columns[event_name][i])->type());
+        }
+        event_independent_column_pos[event_name] = pos;
+        event_independent_column_types[event_name] = this_types;
+    }
 
     for (int event = 0; event < event_names.size() - 1; event++) {
         std::string event_name = event_names[event];
+        
         for (int i = 0; i < event_required_columns[event_name].size(); i++) {
             current_cols.push_back(event_name + "_" + event_required_columns[event_name][i]);
             types.push_back(schema->GetFieldByName(event_required_columns[event_name][i])->type());
         }
+
         offsets.push_back(offsets.back() + current_cols.size());
         std::string sql = "CREATE TABLE matched_sequences_" + std::to_string(event) + " (";
         for (int i = 0; i < current_cols.size(); i++) {
-            sql += current_cols[i] + " " + to_upper(types[i]->ToString()) + ", ";
+            sql += current_cols[i] + " ANY, ";
         }
         sql = sql.substr(0, sql.size() - 2);
         sql += ");";
@@ -107,15 +125,20 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
     size_t total_matched = 0;
     std::vector<std::vector<size_t>> matched_row_counts = {};
 
+    std::vector<std::vector<std::string>> transposed_batch = transpose_arrow_batch(batch);
+
+    std::chrono::duration<double> filter_time(0);
+    std::chrono::duration<double> bind_time(0);
+    std::chrono::duration<double> delete_time(0);
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     for (size_t row = 0; row < num_rows; row++)
     {
 
         double progress = (double) row / num_rows;
-        display_progress(progress);
+        // display_progress(progress);
         auto global_row_count = std::static_pointer_cast<arrow::UInt32Array>(batch->GetColumnByName("__row_count__"))->Value(row);
-        // std::cout << global_row_count << std::endl;
-        // this_row_can_be = [i for i in range(1, total_events) if event_indices[event_names[i]] is None or global_row_count in event_indices[event_names[i]]]
-
+        
         std::vector<int> this_row_can_be = {};
         for (int event = 1; event < event_names.size(); event++) {
             if (event_indices.find(event_names[event]) == event_indices.end() || event_indices[event_names[event]].find(global_row_count) != event_indices[event_names[event]].end()) {
@@ -136,10 +159,28 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                 + std::to_string(std::static_pointer_cast<arrow::UInt64Array>(
                     batch->GetColumnByName(time_col))->Value(row) - 7200);
 
+            auto start_delete = std::chrono::high_resolution_clock::now();
             SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
+            auto end_delete = std::chrono::high_resolution_clock::now();
+            delete_time += end_delete - start_delete;
 
+            auto start_bind = std::chrono::high_resolution_clock::now();
             bind_row_to_sqlite(db, filter_stmts[seq_len - 1], batch, row, event_independent_columns[event_names[seq_len]]);
+
+            // for (int i = 0; i < event_independent_columns[event_names[seq_len]].size(); i++) {
+            //     std::string item = transposed_batch[row][event_independent_column_pos[event_names[seq_len]][i]];
+            //     sqlite3_bind_text(filter_stmts[seq_len - 1], i + 1, item.c_str(), strlen(item.c_str()), SQLITE_TRANSIENT);
+            //     // auto pos = event_independent_column_pos[event_names[seq_len]][i];
+            //     // auto type = event_independent_column_types[event_names[seq_len]][i];
+            //     // std::string item = transposed_batch[row][pos];
+            //     // bind_scalar_to_stmt(filter_stmts[seq_len - 1], i + 1, item, type);
+            // }
             
+            auto end_bind = std::chrono::high_resolution_clock::now();
+            bind_time += end_bind - start_bind;
+            
+            auto start_filter = std::chrono::high_resolution_clock::now();
+
             std::vector<std::vector<std::string>> matched = {};
             while (sqlite3_step(filter_stmts[seq_len - 1]) == SQLITE_ROW) {
                 std::vector<std::string> row = {};
@@ -150,6 +191,10 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
             }
             SQLITE_CLEAR_AND_CHECK(db, filter_stmts[seq_len - 1]);
             SQLITE_RESET_AND_CHECK(db, filter_stmts[seq_len - 1]);
+
+            auto end_filter = std::chrono::high_resolution_clock::now();
+            filter_time += end_filter - start_filter;
+            
 
             if (matched.size() > 0) {
                 if (seq_len == event_names.size() - 1) {
@@ -165,17 +210,28 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                     early_exit = true;
                     break;
                 } else {
+                    
+                    sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, &err_msg);
+
                     for (std::vector<std::string> & matched_row : matched) {
                         int j = 0;
+                        
+                        start_bind = std::chrono::high_resolution_clock::now();
                         for(std::string & item : matched_row){
                             bind_scalar_to_stmt(insert_stmts[seq_len], j + 1, item, types[j]);
                             j += 1;
                         }
+                        
                         bind_row_to_sqlite(db, insert_stmts[seq_len], batch, row, event_required_columns[event_names[seq_len]], matched_row.size() - 1);
+                        end_bind = std::chrono::high_resolution_clock::now();
+                        bind_time += end_bind - start_bind;
+                        
                         SQLITE_STEP_AND_CHECK(db, insert_stmts[seq_len]);
                         SQLITE_RESET_AND_CHECK(db, insert_stmts[seq_len]);
                     }
                     
+                    sqlite3_exec(db, "COMMIT TRANSACTION", NULL, NULL, &err_msg);
+
                     empty[seq_len] = false;
                 }
             }
@@ -191,6 +247,13 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         }
 
     }
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    std::cout << "Loop elapsed time: " << elapsed.count() << " s\n";
+    std::cout << "Filter elapsed time: " << filter_time.count() << " s\n";
+    std::cout << "Bind elapsed time: " << bind_time.count() << " s\n";
+    std::cout << "Delete elapsed time: " << delete_time.count() << " s\n";
 
     // go finalize all the prepared statements
     for (int event = 0; event < event_names.size() - 1; event++) {
