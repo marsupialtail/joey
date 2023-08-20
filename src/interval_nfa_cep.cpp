@@ -14,6 +14,9 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         sqlite3_close(db);
         exit(1);
     }
+    sqlite3_exec(db, "PRAGMA synchronous=OFF", 0, 0, 0);
+    sqlite3_exec(db, "PRAGMA journal_mode=OFF", 0, 0, 0);
+
 
 	if(arrow::py::import_pyarrow() != 0){std::cout << "problem initializing pyarrow" << std::endl;throw 0;}
 	assert(arrow::py::is_table(obj1));
@@ -46,6 +49,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
 
     std::vector<sqlite3_stmt*> insert_stmts (event_names.size() - 1);
     std::vector<sqlite3_stmt*> filter_stmts (event_names.size() - 1);
+    std::vector<sqlite3_stmt*> delete_stmts (event_names.size() - 1);
     std::vector<std::string> current_cols = {};
     std::vector<std::shared_ptr<arrow::DataType>> types = {};
     std::vector<int> offsets = {0};
@@ -94,12 +98,6 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         // std::cout << sql << std::endl;
         SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
 
-        // cur = cur.execute("CREATE INDEX idx_{} ON matched_sequences_{}({});".format(event, event, event_names[0] + "_" + time_col))
-    
-        sql = "CREATE INDEX idx_" + std::to_string(event) + " ON matched_sequences_" + std::to_string(event) + "(" + event_names[0] + "_" + time_col +  ");";
-        // std::cout << sql << std::endl;
-        SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
-
     }
 
     std::vector<size_t> row_count_idx = {};
@@ -107,7 +105,8 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         if (current_cols[i].find("__row_count__") != std::string::npos) {
             row_count_idx.push_back(i);
         }
-    }        
+    }
+    size_t row_count_idx_in_batch = schema->GetFieldIndex("__row_count__");        
 
     for (int event = 0; event < event_names.size(); event++) {
         if (event < event_names.size() - 1) {
@@ -130,91 +129,123 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         }
     }
 
-
-    std::map<int, bool> empty = {};
     for (int event = 0; event < event_names.size() - 1; event++) {
-        empty[event] = true;
+        std::string sql = "DELETE FROM matched_sequences_" + std::to_string(event) + ";";
+        SQLITE_PREPARE_AND_CHECK(db, sql, delete_stmts[event]);
     }
-    
-    size_t num_rows = batch->num_rows();
-    size_t total_matched = 0;
-    std::vector<std::vector<size_t>> matched_row_counts = {};
 
-    std::vector<std::vector<Scalar>>  transposed_batch = transpose_arrow_batch(batch);
 
     std::chrono::duration<double> filter_time(0);
     std::chrono::duration<double> bind_time(0);
-    std::chrono::duration<double> delete_time(0);
-    auto start_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> overhead(0);
+    std::vector<std::vector<size_t>> matched_row_counts = {};
+    std::vector<std::vector<Scalar>>  transposed_batch = transpose_arrow_batch(batch);
 
-    for (size_t row = 0; row < num_rows; row++)
-    {
+    // precompute this_row_can_be for every row
 
-        double progress = (double) row / num_rows;
-        // display_progress(progress);
-        auto global_row_count = std::static_pointer_cast<arrow::UInt32Array>(batch->GetColumnByName("__row_count__"))->Value(row);
-        
+    std::vector<std::vector<int>> rows_can_be = {};
+    for (size_t row = 0; row < batch->num_rows(); row ++) {
         std::vector<int> this_row_can_be = {};
         for (int event = 1; event < event_names.size(); event++) {
-            if (event_indices.find(event_names[event]) == event_indices.end() || event_indices[event_names[event]].find(global_row_count) != event_indices[event_names[event]].end()) {
+            if (event_indices.find(event_names[event]) == event_indices.end() || event_indices[event_names[event]].find(row) != event_indices[event_names[event]].end()) {
                 this_row_can_be.push_back(event);
             }
         }
-        
-        bool early_exit = false;
+        rows_can_be.push_back(this_row_can_be);
+    }
+    
 
-        for (int seq_len : this_row_can_be) {
-                
-            if (empty[seq_len - 1]) {
-                continue;
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    for (std::tuple<size_t, size_t> & start_end_pair : start_end) {
+
+        size_t start = std::get<0>(start_end_pair);
+        size_t end = std::get<1>(start_end_pair) + 1;
+
+        size_t num_rows = end - start;
+
+        std::map<int, bool> empty = {};
+        for (int event = 0; event < event_names.size() - 1; event++) {
+            empty[event] = true;
+        }
+        empty[0] = false;
+
+        int j =0;
+
+        auto start_bind = std::chrono::high_resolution_clock::now();
+
+        for(int pos: event_required_column_pos[event_names[0]]) {
+            bind_scalar_to_stmt(insert_stmts[0], ++j, transposed_batch[start][pos]);
+        }
+        SQLITE_STEP_AND_CHECK(db, insert_stmts[0]);
+        SQLITE_RESET_AND_CHECK(db, insert_stmts[0]);
+
+        auto end_bind = std::chrono::high_resolution_clock::now();
+        bind_time += end_bind - start_bind;
+
+        for (size_t row = 1; row < num_rows; row++)
+        {
+
+            auto start_overhead = std::chrono::high_resolution_clock::now();
+            Scalar global_row_count_scalar = transposed_batch[row + start][row_count_idx_in_batch];
+            size_t global_row_count;
+            if (std::holds_alternative<int> (global_row_count_scalar)) {
+                global_row_count = std::get<int>(global_row_count_scalar);
+            } else if (std::holds_alternative<long> (global_row_count_scalar)) {
+                global_row_count = std::get<int>(global_row_count_scalar);
+            } else {
+                std::cout << "error: row count type not understood" << std::endl;
+                exit(1);
             }
-            
-            std::string sql = "DELETE FROM matched_sequences_" + std::to_string(seq_len - 1) 
-                + " WHERE " + event_names[0] + "_" + time_col + " < " 
-                + std::to_string(std::static_pointer_cast<arrow::UInt64Array>(
-                    batch->GetColumnByName(time_col))->Value(row) - 7200);
+            auto end_overhead = std::chrono::high_resolution_clock::now();
+            overhead += end_overhead - start_overhead;
 
-            auto start_delete = std::chrono::high_resolution_clock::now();
-            SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
-            auto end_delete = std::chrono::high_resolution_clock::now();
-            delete_time += end_delete - start_delete;
+            bool early_exit = false;
 
-            auto start_bind = std::chrono::high_resolution_clock::now();
-            
-            // bind_row_to_sqlite(db, filter_stmts[seq_len - 1], batch, row, event_independent_columns[event_names[seq_len]]);
-
-            for (int i = 0; i < event_independent_columns[event_names[seq_len]].size(); i++) {
-                auto pos = event_independent_column_pos[event_names[seq_len]][i];
-                auto type = event_independent_column_types[event_names[seq_len]][i];
-                Scalar item = transposed_batch[row][pos];    
-                bind_scalar_to_stmt(filter_stmts[seq_len - 1], i + 1, item);
-            }
-
-            auto end_bind = std::chrono::high_resolution_clock::now();
-            bind_time += end_bind - start_bind;
-                        
-            auto start_filter = std::chrono::high_resolution_clock::now();
-
-            std::vector<std::vector<Scalar>> matched = {};
-            while (sqlite3_step(filter_stmts[seq_len - 1]) == SQLITE_ROW) {
-                std::vector<Scalar> row = {};
-                for (int col = 0; col < sqlite3_column_count(filter_stmts[seq_len - 1]); col++) {
-                    Scalar value = recover_scalar_from_stmt(filter_stmts[seq_len - 1], col, types[col]);
-                    row.push_back(value);
-                }
-                matched.push_back(row);
-            }
-            SQLITE_CLEAR_AND_CHECK(db, filter_stmts[seq_len - 1]);
-            SQLITE_RESET_AND_CHECK(db, filter_stmts[seq_len - 1]);
-
-            auto end_filter = std::chrono::high_resolution_clock::now();
-            filter_time += end_filter - start_filter;
-            
-
-            if (matched.size() > 0) {
-                if (seq_len == event_names.size() - 1) {
+            for (int seq_len : rows_can_be[global_row_count]) {
                     
-                    for (std::vector<Scalar> & matched_row : matched) {
+                if (empty[seq_len - 1]) {
+                    continue;
+                }
+
+                auto start_bind = std::chrono::high_resolution_clock::now();
+                
+                // bind_row_to_sqlite(db, filter_stmts[seq_len - 1], batch, row, event_independent_columns[event_names[seq_len]]);
+
+                for (int i = 0; i < event_independent_columns[event_names[seq_len]].size(); i++) {
+                    auto pos = event_independent_column_pos[event_names[seq_len]][i];
+                    auto type = event_independent_column_types[event_names[seq_len]][i];
+                    Scalar item = transposed_batch[global_row_count][pos];    
+                    bind_scalar_to_stmt(filter_stmts[seq_len - 1], i + 1, item);
+                }
+
+                auto end_bind = std::chrono::high_resolution_clock::now();
+                bind_time += end_bind - start_bind;
+                            
+                auto start_filter = std::chrono::high_resolution_clock::now();
+
+                std::vector<std::vector<Scalar>> matched = {};
+                while (sqlite3_step(filter_stmts[seq_len - 1]) == SQLITE_ROW) {
+                    std::vector<Scalar> row = {};
+                    for (int col = 0; col < sqlite3_column_count(filter_stmts[seq_len - 1]); col++) {
+                        Scalar value = recover_scalar_from_stmt(filter_stmts[seq_len - 1], col, types[col]);
+                        row.push_back(value);
+                    }
+                    matched.push_back(row);
+                }
+                SQLITE_CLEAR_AND_CHECK(db, filter_stmts[seq_len - 1]);
+                SQLITE_RESET_AND_CHECK(db, filter_stmts[seq_len - 1]);
+
+                auto end_filter = std::chrono::high_resolution_clock::now();
+                filter_time += end_filter - start_filter;
+                
+
+                if (matched.size() > 0) {
+
+                    if (seq_len == event_names.size() - 1) {
+
+                        auto matched_row = matched[0];
+                        // for (std::vector<Scalar> & matched_row : matched) {
                         std::vector<size_t> row_counts = {};
                         for(int i = 0; i < row_count_idx.size(); i++) {
                             Scalar row_count = matched_row[row_count_idx[i]];
@@ -229,54 +260,52 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                         }
                         row_counts.push_back(global_row_count);
                         matched_row_counts.push_back(row_counts);
-                    }
-                    early_exit = true;
-                    break;
-                } else {
-                    
-                    sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, &err_msg);
+                        
+                        //}
+                        early_exit = true;
 
-                    for (std::vector<Scalar> & matched_row : matched) {
-
+                        break;
+                    } else {
+                        
                         start_bind = std::chrono::high_resolution_clock::now();
                         
-                        int j = 0;
-                        for(Scalar & item : matched_row){
-                            bind_scalar_to_stmt(insert_stmts[seq_len], ++j, item);
+                        for (std::vector<Scalar> & matched_row : matched) {
+
+                            int j = 0;
+                            for(Scalar & item : matched_row){
+                                bind_scalar_to_stmt(insert_stmts[seq_len], ++j, item);
+                            }
+
+                            for(int pos: event_required_column_pos[event_names[seq_len]]) {
+                                bind_scalar_to_stmt(insert_stmts[seq_len], ++j, transposed_batch[global_row_count][pos]);
+                            }
+                            
+                            SQLITE_STEP_AND_CHECK(db, insert_stmts[seq_len]);
+                            SQLITE_RESET_AND_CHECK(db, insert_stmts[seq_len]);
+
                         }
 
-                        for(int pos: event_required_column_pos[event_names[seq_len]]) {
-                            bind_scalar_to_stmt(insert_stmts[seq_len], ++j, transposed_batch[row][pos]);
-                        }
-                        
                         end_bind = std::chrono::high_resolution_clock::now();
                         bind_time += end_bind - start_bind;
-                        
-                        SQLITE_STEP_AND_CHECK(db, insert_stmts[seq_len]);
-                        SQLITE_RESET_AND_CHECK(db, insert_stmts[seq_len]);
+
+                        empty[seq_len] = false;
                     }
-                    
-                    sqlite3_exec(db, "COMMIT TRANSACTION", NULL, NULL, &err_msg);
-
-                    empty[seq_len] = false;
                 }
+
+                if(early_exit) break;
             }
 
-            if(early_exit) break;
         }
 
-        if (event_indices.find(event_names[0]) == event_indices.end() || event_indices[event_names[0]].find(global_row_count) != event_indices[event_names[0]].end()) {
-                        
-            int j =0;
-            for(int pos: event_required_column_pos[event_names[0]]) {
-                bind_scalar_to_stmt(insert_stmts[0], ++j, transposed_batch[row][pos]);
+
+        for(int seq_len = 0; seq_len < event_names.size() - 1; seq_len++){
+            if (empty[seq_len]) {
+                continue;
             }
-            
-            SQLITE_STEP_AND_CHECK(db, insert_stmts[0]);
-            SQLITE_RESET_AND_CHECK(db, insert_stmts[0]);
-            empty[0] = false;
+            SQLITE_STEP_AND_CHECK(db, delete_stmts[seq_len]);
+            SQLITE_RESET_AND_CHECK(db, delete_stmts[seq_len]);
         }
-
+        
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -284,12 +313,13 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
     std::cout << "Loop elapsed time: " << elapsed.count() << " s\n";
     std::cout << "Filter elapsed time: " << filter_time.count() << " s\n";
     std::cout << "Bind elapsed time: " << bind_time.count() << " s\n";
-    std::cout << "Delete elapsed time: " << delete_time.count() << " s\n";
+    std::cout << "Overhead elapsed time: " << overhead.count() << " s\n";
 
     // go finalize all the prepared statements
     for (int event = 0; event < event_names.size() - 1; event++) {
         sqlite3_finalize(insert_stmts[event]);
         sqlite3_finalize(filter_stmts[event]);
+        sqlite3_finalize(delete_stmts[event]);
     }
 
     sqlite3_close(db);

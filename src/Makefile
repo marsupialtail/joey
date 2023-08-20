@@ -8,15 +8,21 @@ LDFLAGS = -pthread -shared -B $(PYTHON)/compiler_compat -L$(PYTHON)/lib -Wl,-rpa
 LIBS = -L$(ARROW) -l:libarrow.so.1200 -l:libarrow_python.so -l:libpython3.8.so -lsqlite3
 
 # Targets
-all: example.cpython-37m-x86_64-linux-gnu.so
+all: nfa.cpython-37m-x86_64-linux-gnu.so interval_nfa.cpython-37m-x86_64-linux-gpu.so
 
-example.o: interval_nfa_cep.cpp
+nfa.o: nfa_cep.cpp
 	$(CC) $(CFLAGS) -c $< -o $@
 
-example.cpython-37m-x86_64-linux-gnu.so: example.o
+interval_nfa.o: interval_nfa_cep.cpp
+	$(CC) $(CFLAGS) -c $< -o $@
+
+nfa.cpython-37m-x86_64-linux-gnu.so: nfa.o
+	$(CXX) $(LDFLAGS) $^ $(LIBS) -o $@
+
+interval_nfa.cpython-37m-x86_64-linux-gpu.so: interval_nfa.o
 	$(CXX) $(LDFLAGS) $^ $(LIBS) -o $@
 
 clean:
-	rm -f example.o example.cpython-37m-x86_64-linux-gnu.so
+	rm -f *.o *.so
 
 .PHONY: all clean

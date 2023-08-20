@@ -78,7 +78,7 @@ def nfa_interval_cep_c(batch, events, time_col, max_span, by = None, event_udfs 
     total_events = len(event_names)
     data = batch.to_arrow()
     assert len(data) == len(batch)
-    lib = PyDLL('src/example.cpython-37m-x86_64-linux-gnu.so')
+    lib = PyDLL('src/interval_nfa.cpython-37m-x86_64-linux-gpu.so')
     lib.MyFunction.argtypes = [py_object, py_object, POINTER(KeyStringListPair), POINTER(KeyStringListPair), POINTER(c_char_p), POINTER(DictEntry), c_int, c_int, c_char_p]
     lib.MyFunction.restype = Vector2D
     #print(lib._Z10MyFunctionP7_object(1))
