@@ -26,9 +26,17 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
 	std::shared_ptr<arrow::RecordBatch> batch = result1.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
 	std::shared_ptr<arrow::RecordBatch> intervals = result2.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
 
+    std::vector<std::tuple<size_t, size_t>> start_end = {};
+    for (size_t i = 0; i < intervals->num_rows(); i++) {
+        start_end.push_back(std::make_tuple(
+            std::static_pointer_cast<arrow::UInt32Array>(intervals->GetColumnByName("__arc__"))->Value(i),
+            std::static_pointer_cast<arrow::UInt32Array>(intervals->GetColumnByName("__crc__"))->Value(i)
+        ));
+    }
+
     std::map<std::string, std::vector<std::string>> event_required_columns = processDict(obj3, num_events);
     std::map<std::string, std::vector<std::string>> event_independent_columns = processDict(obj4, num_events);
-    std::map<std::string, std::set<int>> event_indices = processDictSet(obj6, num_indices);
+    std::map<std::string, std::unordered_set<int>> event_indices = processDictSet(obj6, num_indices);
     std::vector<std::string> event_predicates = processList(obj5, num_events);
     // put the keys of event_required_columns into a vector
     std::vector<std::string> event_names = {};
@@ -45,6 +53,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
     std::shared_ptr<arrow::Schema> schema = batch->schema();
     int num_fields = schema->num_fields();
 
+    std::map<std::string, std::vector<int>> event_required_column_pos;
     std::map<std::string, std::vector<int>> event_independent_column_pos;
     std::map<std::string, std::vector<std::shared_ptr<arrow::DataType>>> event_independent_column_types;
 
@@ -52,12 +61,18 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         std::string event_name = event_names[event];
         std::vector<int> pos = {};
         std::vector<std::shared_ptr<arrow::DataType>> this_types = {};
+        std::vector<int> pos2 = {};
 
         for (int i = 0; i < event_independent_columns[event_name].size(); i++) {
             pos.push_back(schema->GetFieldIndex(event_independent_columns[event_name][i]));
             this_types.push_back(schema->GetFieldByName(event_independent_columns[event_name][i])->type());
         }
+
+        for (int i = 0; i < event_required_columns[event_name].size(); i++) {
+            pos2.push_back(schema->GetFieldIndex(event_required_columns[event_name][i]));
+        }
         event_independent_column_pos[event_name] = pos;
+        event_required_column_pos[event_name] = pos2;
         event_independent_column_types[event_name] = this_types;
     }
 
@@ -125,7 +140,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
     size_t total_matched = 0;
     std::vector<std::vector<size_t>> matched_row_counts = {};
 
-    std::vector<std::vector<std::string>> transposed_batch = transpose_arrow_batch(batch);
+    std::vector<std::vector<Scalar>>  transposed_batch = transpose_arrow_batch(batch);
 
     std::chrono::duration<double> filter_time(0);
     std::chrono::duration<double> bind_time(0);
@@ -165,27 +180,27 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
             delete_time += end_delete - start_delete;
 
             auto start_bind = std::chrono::high_resolution_clock::now();
-            bind_row_to_sqlite(db, filter_stmts[seq_len - 1], batch, row, event_independent_columns[event_names[seq_len]]);
-
-            // for (int i = 0; i < event_independent_columns[event_names[seq_len]].size(); i++) {
-            //     std::string item = transposed_batch[row][event_independent_column_pos[event_names[seq_len]][i]];
-            //     sqlite3_bind_text(filter_stmts[seq_len - 1], i + 1, item.c_str(), strlen(item.c_str()), SQLITE_TRANSIENT);
-            //     // auto pos = event_independent_column_pos[event_names[seq_len]][i];
-            //     // auto type = event_independent_column_types[event_names[seq_len]][i];
-            //     // std::string item = transposed_batch[row][pos];
-            //     // bind_scalar_to_stmt(filter_stmts[seq_len - 1], i + 1, item, type);
-            // }
             
+            // bind_row_to_sqlite(db, filter_stmts[seq_len - 1], batch, row, event_independent_columns[event_names[seq_len]]);
+
+            for (int i = 0; i < event_independent_columns[event_names[seq_len]].size(); i++) {
+                auto pos = event_independent_column_pos[event_names[seq_len]][i];
+                auto type = event_independent_column_types[event_names[seq_len]][i];
+                Scalar item = transposed_batch[row][pos];    
+                bind_scalar_to_stmt(filter_stmts[seq_len - 1], i + 1, item);
+            }
+
             auto end_bind = std::chrono::high_resolution_clock::now();
             bind_time += end_bind - start_bind;
-            
+                        
             auto start_filter = std::chrono::high_resolution_clock::now();
 
-            std::vector<std::vector<std::string>> matched = {};
+            std::vector<std::vector<Scalar>> matched = {};
             while (sqlite3_step(filter_stmts[seq_len - 1]) == SQLITE_ROW) {
-                std::vector<std::string> row = {};
+                std::vector<Scalar> row = {};
                 for (int col = 0; col < sqlite3_column_count(filter_stmts[seq_len - 1]); col++) {
-                    row.push_back((const char*)sqlite3_column_text(filter_stmts[seq_len - 1], col));
+                    Scalar value = recover_scalar_from_stmt(filter_stmts[seq_len - 1], col, types[col]);
+                    row.push_back(value);
                 }
                 matched.push_back(row);
             }
@@ -199,10 +214,18 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
             if (matched.size() > 0) {
                 if (seq_len == event_names.size() - 1) {
                     
-                    for (std::vector<std::string> & matched_row : matched) {
+                    for (std::vector<Scalar> & matched_row : matched) {
                         std::vector<size_t> row_counts = {};
                         for(int i = 0; i < row_count_idx.size(); i++) {
-                            row_counts.push_back(std::stoul(matched_row[row_count_idx[i]]));
+                            Scalar row_count = matched_row[row_count_idx[i]];
+                            if (std::holds_alternative<int> (row_count)) {
+                                row_counts.push_back(std::get<int>(row_count));
+                            } else if (std::holds_alternative<long> (row_count)) {
+                                row_counts.push_back(std::get<long>(row_count));
+                            } else {
+                                std::cout << "error: row count type not understood" << std::endl;
+                                throw 0;
+                            } 
                         }
                         row_counts.push_back(global_row_count);
                         matched_row_counts.push_back(row_counts);
@@ -213,16 +236,19 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                     
                     sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, &err_msg);
 
-                    for (std::vector<std::string> & matched_row : matched) {
-                        int j = 0;
-                        
+                    for (std::vector<Scalar> & matched_row : matched) {
+
                         start_bind = std::chrono::high_resolution_clock::now();
-                        for(std::string & item : matched_row){
-                            bind_scalar_to_stmt(insert_stmts[seq_len], j + 1, item, types[j]);
-                            j += 1;
+                        
+                        int j = 0;
+                        for(Scalar & item : matched_row){
+                            bind_scalar_to_stmt(insert_stmts[seq_len], ++j, item);
+                        }
+
+                        for(int pos: event_required_column_pos[event_names[seq_len]]) {
+                            bind_scalar_to_stmt(insert_stmts[seq_len], ++j, transposed_batch[row][pos]);
                         }
                         
-                        bind_row_to_sqlite(db, insert_stmts[seq_len], batch, row, event_required_columns[event_names[seq_len]], matched_row.size() - 1);
                         end_bind = std::chrono::high_resolution_clock::now();
                         bind_time += end_bind - start_bind;
                         
@@ -240,7 +266,12 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         }
 
         if (event_indices.find(event_names[0]) == event_indices.end() || event_indices[event_names[0]].find(global_row_count) != event_indices[event_names[0]].end()) {
-            bind_row_to_sqlite(db, insert_stmts[0], batch, row, event_required_columns[event_names[0]]);
+                        
+            int j =0;
+            for(int pos: event_required_column_pos[event_names[0]]) {
+                bind_scalar_to_stmt(insert_stmts[0], ++j, transposed_batch[row][pos]);
+            }
+            
             SQLITE_STEP_AND_CHECK(db, insert_stmts[0]);
             SQLITE_RESET_AND_CHECK(db, insert_stmts[0]);
             empty[0] = false;

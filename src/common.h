@@ -7,7 +7,7 @@
 #include <vector>
 #include<tuple>
 #include <map>
-#include <set>
+#include <unordered_set>
 //#include <gtest/gtest.h>
 
 #include "arrow/array/array_base.h"
@@ -26,6 +26,10 @@
 #include <arrow/table.h>
 #include <cctype>  // for std::toupper
 #include <chrono>
+
+#include <variant>
+
+typedef std::variant<int, long, double, std::string> Scalar;
 
 std::string to_upper(const std::string& input) {
     std::string result = input;
@@ -146,10 +150,10 @@ std::vector<std::string> processList(const char** pairs, int num_keys) {
     return list;
 }
 
-std::map<std::string, std::set<int>> processDictSet(DictEntry* entries, int length) {
-    std::map<std::string, std::set<int>> cpp_map;
+std::map<std::string, std::unordered_set<int>> processDictSet(DictEntry* entries, int length) {
+    std::map<std::string, std::unordered_set<int>> cpp_map;
     for (int i = 0; i < length; i++) {
-        std::set<int> s(entries[i].values.data, entries[i].values.data + entries[i].values.length);
+        std::unordered_set<int> s(entries[i].values.data, entries[i].values.data + entries[i].values.length);
         cpp_map[entries[i].key] = s;
     }
     return cpp_map;
@@ -169,198 +173,70 @@ void display_progress(double progress) {
     std::cout.flush();
 }
 
-template <typename BuilderType, typename T>
-void AppendValues(BuilderType* builder, const std::vector<T>& values,
-                  const std::vector<bool>& is_valid) {
-  for (size_t i = 0; i < values.size(); ++i) {
-    if (is_valid.size() == 0 || is_valid[i]) {
-      builder->Append(values[i]);
+void bind_scalar_to_stmt(sqlite3_stmt* stmt, int j, Scalar item){
+    if (std::holds_alternative<int> (item)) {
+        sqlite3_bind_int(stmt, j , std::get<int>(item));
+    } else if (std::holds_alternative<long> (item)) {
+        sqlite3_bind_int64(stmt, j , std::get<long>(item));
+    } else if (std::holds_alternative<double>(item)) {
+        sqlite3_bind_double(stmt, j , std::get<double>(item));
+    } else if (std::holds_alternative<std::string>(item)) {
+        sqlite3_bind_text(stmt, j , std::get<std::string>(item).c_str(), -1, SQLITE_TRANSIENT);
     } else {
-      builder->AppendNull();
+        std::cout << "Unsupported type " << item.index() << std::endl;
+        exit(1);
     }
-  }
 }
-//std::vector<int64_t> f0_values = {0, 1, 2, 3};
-//std::vector<bool> is_valid = {true, true, true, true};
-//AppendValues<arrow::Int64Builder, int64_t>(&b0, f0_values, is_valid);
 
-void bind_scalar_to_stmt(sqlite3_stmt* stmt, int j, std::string item, std::shared_ptr<arrow::DataType> type){
+Scalar recover_scalar_from_stmt(sqlite3_stmt* stmt, int col, std::shared_ptr<arrow::DataType> type) {
+    Scalar value;
     switch(type->id()) {
         case arrow::Type::BOOL: {
-            sqlite3_bind_int(stmt, j, std::stoi(item));
+            value = sqlite3_column_int(stmt, col);
             break;
         }
-
         case arrow::Type::DOUBLE: {
-            sqlite3_bind_double(stmt, j, std::stod(item));
+            value = sqlite3_column_double(stmt, col);
             break;
         }
-
         case arrow::Type::FLOAT: {
-            sqlite3_bind_double(stmt, j, std::stof(item));
+            value = sqlite3_column_double(stmt, col);
             break;
         }
-
-        case arrow::Type::INT64: {
-            sqlite3_bind_int64(stmt, j, std::stoll(item));
-            break;
-        }
-
         case arrow::Type::INT32: {
-            sqlite3_bind_int(stmt, j, std::stoi(item));
+            value = sqlite3_column_int(stmt, col);
             break;
         }
-
-        case arrow::Type::UINT64: {
-            sqlite3_bind_int64(stmt, j, std::stoull(item));
-            break;
-        }
-
         case arrow::Type::UINT32: {
-            sqlite3_bind_int(stmt, j, std::stoi(item));
+            value = sqlite3_column_int(stmt, col);
             break;
         }
-
+        case arrow::Type::INT64: {
+            value = sqlite3_column_int64(stmt, col);
+            break;
+        }
+        case arrow::Type::UINT64: {
+            value = sqlite3_column_int64(stmt, col);
+            break;
+        }
         case arrow::Type::STRING: {
-            sqlite3_bind_text(stmt, j, item.c_str(), -1, SQLITE_TRANSIENT);
+            value = (const char*)sqlite3_column_text(stmt, col);
             break;
         }
-
-        case arrow::Type::LARGE_STRING: {
-            sqlite3_bind_text(stmt, j, item.c_str(), -1, SQLITE_TRANSIENT);
-            break;
-        }
-
         default: {
-            std::cout << "Unsupported type " << type->ToString() << std::endl;
+            std::cout << "unsupported type" << std::endl;
             exit(1);
         }
     }
+    return value;
 }
 
-void bind_row_to_sqlite(sqlite3* db, sqlite3_stmt* stmt, std::shared_ptr<arrow::RecordBatch> batch, int row, std::vector<std::string> column_names, int offset = -1) {
-    int rc;
-
-    // std::cout << schema->ToString() << std::endl;
-    
-    int i = row;
-    int j = offset;
-    for (std::string & column_name : column_names) {
-
-        j += 1;
-        std::shared_ptr<arrow::Array> array1 = batch->GetColumnByName(column_name);
-        std::shared_ptr<arrow::DataType> type = array1->type();
-
-        switch(type->id()) {
-            case arrow::Type::BOOL: {
-                std::shared_ptr<arrow::BooleanArray> array = std::static_pointer_cast<arrow::BooleanArray>(array1);
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_int(stmt, j + 1, array->Value(i));
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            case arrow::Type::DOUBLE: {
-                std::shared_ptr<arrow::DoubleArray> array = std::static_pointer_cast<arrow::DoubleArray>(array1);
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_double(stmt, j + 1, array->Value(i));
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            case arrow::Type::FLOAT: {
-                std::shared_ptr<arrow::FloatArray> array = std::static_pointer_cast<arrow::FloatArray>(array1);
-                rc = sqlite3_bind_double(stmt, j + 1, (float)array->Value(i));
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_double(stmt, j + 1, (float)array->Value(i));
-
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            case arrow::Type::INT64: {
-                std::shared_ptr<arrow::Int64Array> array = std::static_pointer_cast<arrow::Int64Array>(array1);
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_int64(stmt, j + 1, array->Value(i));
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            case arrow::Type::INT32: {
-                std::shared_ptr<arrow::Int32Array> array = std::static_pointer_cast<arrow::Int32Array>(array1);
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_int(stmt, j + 1, array->Value(i));
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            case arrow::Type::UINT64: {
-                std::shared_ptr<arrow::UInt64Array> array = std::static_pointer_cast<arrow::UInt64Array>(array1);
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_int64(stmt, j + 1, array->Value(i));
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            case arrow::Type::UINT32: {
-                std::shared_ptr<arrow::UInt32Array> array = std::static_pointer_cast<arrow::UInt32Array>(array1);
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_int(stmt, j + 1, array->Value(i));
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            case arrow::Type::STRING: {
-                std::shared_ptr<arrow::StringArray> array = std::static_pointer_cast<arrow::StringArray>(array1);
-
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_text(stmt, j + 1, array->GetString(i).c_str(), -1, SQLITE_TRANSIENT);
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            case arrow::Type::LARGE_STRING: {
-                std::shared_ptr<arrow::LargeStringArray> array = std::static_pointer_cast<arrow::LargeStringArray>(array1);
-
-                if (array->IsValid(i)) {
-                    rc = sqlite3_bind_text(stmt, j + 1, array->GetString(i).c_str(), -1, SQLITE_TRANSIENT);
-                } else {
-                    rc = sqlite3_bind_null(stmt, j + 1);
-                }
-                break;
-            }
-
-            default: {
-                rc = sqlite3_bind_null(stmt, j + 1);
-                break;
-            }
-        }
-    }
-    
-}
-
-std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arrow::RecordBatch> batch) {
+std::vector<std::vector<Scalar>> transpose_arrow_batch(std::shared_ptr<arrow::RecordBatch> batch) {
 
     auto num_rows = batch->num_rows();
     auto num_columns = batch->num_columns();
 
-    std::vector<std::vector<std::string>> result(num_rows, std::vector<std::string>(num_columns));
+    std::vector<std::vector<Scalar>> result(num_rows, std::vector<Scalar>(num_columns));
     
     for (int row = 0; row < num_rows; row++) {
         for (int j = 0; j < num_columns; j++) {
@@ -373,7 +249,7 @@ std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arro
                 case arrow::Type::BOOL: {
                     std::shared_ptr<arrow::BooleanArray> array = std::static_pointer_cast<arrow::BooleanArray>(array1);
                     if (array->IsValid(i)) {
-                        result[row][j] = (array->Value(i) ? "true" : "false");
+                        result[row][j] = (array->Value(i) ? static_cast<int>(1) : static_cast<int>(0));
                     } else {
                         std::cout << "does not support null values" << std::endl;
                         exit(1);
@@ -384,7 +260,7 @@ std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arro
                 case arrow::Type::DOUBLE: {
                     std::shared_ptr<arrow::DoubleArray> array = std::static_pointer_cast<arrow::DoubleArray>(array1);
                     if (array->IsValid(i)) {
-                        result[row][j] = std::to_string(array->Value(i));
+                        result[row][j] = array->Value(i);
                     } else {
                         std::cout << "does not support null values" << std::endl;
                         exit(1);
@@ -395,7 +271,7 @@ std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arro
                 case arrow::Type::FLOAT: {
                     std::shared_ptr<arrow::FloatArray> array = std::static_pointer_cast<arrow::FloatArray>(array1);
                     if (array->IsValid(i)) {
-                        result[row][j] = std::to_string((float)array->Value(i));
+                        result[row][j] = static_cast<double>(array->Value(i));
                     } else {
                         std::cout << "does not support null values" << std::endl;
                         exit(1);
@@ -406,7 +282,7 @@ std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arro
                 case arrow::Type::INT64: {
                     std::shared_ptr<arrow::Int64Array> array = std::static_pointer_cast<arrow::Int64Array>(array1);
                     if (array->IsValid(i)) {
-                        result[row][j] = std::to_string(array->Value(i));
+                        result[row][j] = array->Value(i);
                     } else {
                         std::cout << "does not support null values" << std::endl;
                         exit(1);
@@ -417,7 +293,7 @@ std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arro
                 case arrow::Type::INT32: {
                     std::shared_ptr<arrow::Int32Array> array = std::static_pointer_cast<arrow::Int32Array>(array1);
                     if (array->IsValid(i)) {
-                        result[row][j] = std::to_string(array->Value(i));
+                        result[row][j] = array->Value(i);
                     } else {
                         std::cout << "does not support null values" << std::endl;
                         exit(1);
@@ -428,7 +304,8 @@ std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arro
                 case arrow::Type::UINT64: {
                     std::shared_ptr<arrow::UInt64Array> array = std::static_pointer_cast<arrow::UInt64Array>(array1);
                     if (array->IsValid(i)) {
-                        result[row][j] = std::to_string(array->Value(i));
+                        assert(array->Value(i) <= std::numeric_limits<int64_t>::max());
+                        result[row][j] = static_cast<int64_t>(array->Value(i));
                     } else {
                         std::cout << "does not support null values" << std::endl;
                         exit(1);
@@ -439,7 +316,8 @@ std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arro
                 case arrow::Type::UINT32: {
                     std::shared_ptr<arrow::UInt32Array> array = std::static_pointer_cast<arrow::UInt32Array>(array1);
                     if (array->IsValid(i)) {
-                        result[row][j] = std::to_string(array->Value(i));
+                        assert(array->Value(i) <= std::numeric_limits<int32_t>::max());
+                        result[row][j] = static_cast<int32_t>(array->Value(i));
                     } else {
                         std::cout << "does not support null values" << std::endl;
                         exit(1);
@@ -476,9 +354,6 @@ std::vector<std::vector<std::string>> transpose_arrow_batch(std::shared_ptr<arro
                     std::cout << "Unsupported type " << type->ToString() << std::endl;
                     exit(1);
                 }
-
-                
-
                 
             }
         }
