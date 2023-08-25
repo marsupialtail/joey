@@ -3,15 +3,11 @@ import sqlite3
 import duckdb
 import pickle
 
-def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
-    
-    assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
-    if by is None:
-        assert batch[time_col].is_sorted(), "batch must be sorted by time_col"
-    else:
-        assert by in batch.columns
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
+
+def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = {}, fix = "start"):
+
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals, row_count_mapping = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
 
     total_events = len(events)
 
@@ -22,7 +18,6 @@ def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = 
     total_filter_time = 0
     total_filter_times = {event_name: [] for event_name in event_names}
     total_other_time = 0
-    counter = 0
 
     partitioned = batch.partition_by(by, as_dict = True) if by is not None else {"dummy":batch}
     length_dicts = {event_name: [] for event_name in event_names}
@@ -89,10 +84,16 @@ def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = 
                     if len(matched) > 0:
                        
                         if seq_len == total_events - 1:
+
+                            # if it is fix_start, we just need one match
+                            # if it is fix_end, we only need one match for this end row count
+                            # either way we only need matched[0]
+
                             row_counts = [matched[0][i] for i in row_count_idx] + [interval[row]["__row_count__"]]
                             matched_events.append(row_counts)
-                            early_exit = True
-                            break
+                            if fix == 'start':
+                                early_exit = True
+                                break
                         else:
                             val = tuple([interval[row][k] for k in event_required_columns[event_names[seq_len]]])
                             matched = [row + val for row in matched]
@@ -119,20 +120,7 @@ def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = 
     print("TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts]))
     print("TOTAL FILTERED ROWS: ", sum([np.sum(length_dicts[key]) for key in length_dicts]))
 
-    if len(matched_events) > 0:
-
-        matched_events = [item for sublist in matched_events for item in sublist]
-        matched_events = batch[matched_events].select(["__row_count__", time_col, by]) if by is not None else batch[matched_events].select(["__row_count__", time_col])
-        
-        events = [matched_events[i::total_events] for i in range(total_events)]
-        for i in range(total_events):
-            if i != 0 and by is not None:
-                events[i] = events[i].drop(by)
-            events[i] = events[i].rename({"__row_count__" : event_names[i] + "___row_count__", time_col : event_names[i] + "_" + time_col})
-        matched_events = polars.concat(events, how = 'horizontal')
-        return matched_events
+    return process_matched_events(batch, matched_events, row_count_mapping, event_names, time_col, by, total_events)
     
-    else:
-        return None
 
 

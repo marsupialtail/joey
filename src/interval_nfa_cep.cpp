@@ -151,6 +151,8 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                 this_row_can_be.push_back(event);
             }
         }
+        //reverse sort this_row_can_be
+        std::sort(this_row_can_be.begin(), this_row_can_be.end(), std::greater<int>());
         rows_can_be.push_back(this_row_can_be);
     }
     
@@ -158,6 +160,8 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
     auto start_time = std::chrono::high_resolution_clock::now();
 
     for (std::tuple<size_t, size_t> & start_end_pair : start_end) {
+
+        
 
         size_t start = std::get<0>(start_end_pair);
         size_t end = std::get<1>(start_end_pair) + 1;
@@ -170,9 +174,8 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         }
         empty[0] = false;
 
-        int j =0;
-
         auto start_bind = std::chrono::high_resolution_clock::now();
+        int j =0;
 
         for(int pos: event_required_column_pos[event_names[0]]) {
             bind_scalar_to_stmt(insert_stmts[0], ++j, transposed_batch[start][pos]);
@@ -187,6 +190,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
         {
 
             auto start_overhead = std::chrono::high_resolution_clock::now();
+
             Scalar global_row_count_scalar = transposed_batch[row + start][row_count_idx_in_batch];
             size_t global_row_count;
             if (std::holds_alternative<int> (global_row_count_scalar)) {
@@ -197,8 +201,6 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                 std::cout << "error: row count type not understood" << std::endl;
                 exit(1);
             }
-            auto end_overhead = std::chrono::high_resolution_clock::now();
-            overhead += end_overhead - start_overhead;
 
             bool early_exit = false;
 
@@ -243,8 +245,6 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
 
                     if (seq_len == event_names.size() - 1) {
 
-                        auto start_overhead = std::chrono::high_resolution_clock::now();
-
                         auto matched_row = matched[0];
                         // for (std::vector<Scalar> & matched_row : matched) {
                         std::vector<size_t> row_counts = {};
@@ -261,9 +261,6 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                         }
                         row_counts.push_back(global_row_count);
                         matched_row_counts.push_back(row_counts);
-
-                        auto end_overhead = std::chrono::high_resolution_clock::now();
-                        overhead += end_overhead - start_overhead;
                         
                         //}
                         early_exit = true;
@@ -296,11 +293,13 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                     }
                 }
 
+                auto end_overhead = std::chrono::high_resolution_clock::now();
+                overhead += end_overhead - start_overhead;
+
                 if(early_exit) break;
             }
 
         }
-
 
         for(int seq_len = 0; seq_len < event_names.size() - 1; seq_len++){
             if (empty[seq_len]) {
@@ -309,7 +308,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
             SQLITE_STEP_AND_CHECK(db, delete_stmts[seq_len]);
             SQLITE_RESET_AND_CHECK(db, delete_stmts[seq_len]);
         }
-        
+
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();

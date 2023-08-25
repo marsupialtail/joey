@@ -154,7 +154,7 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
     {
 
         double progress = (double) row / num_rows;
-        // display_progress(progress);
+        display_progress(progress);
         Scalar global_row_count_scalar = transposed_batch[row][row_count_idx_in_batch];
         size_t global_row_count;
         if (std::holds_alternative<int> (global_row_count_scalar)) {
@@ -172,9 +172,8 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                 this_row_can_be.push_back(event);
             }
         }
+        std::sort(this_row_can_be.begin(), this_row_can_be.end(), std::greater<int>());
         
-        bool early_exit = false;
-
         for (int seq_len : this_row_can_be) {
                 
             if (empty[seq_len - 1]) {
@@ -242,11 +241,8 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                         row_counts.push_back(global_row_count);
                         matched_row_counts.push_back(row_counts);
                     }
-                    early_exit = true;
-                    break;
                 } else {
                     
-                    sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, &err_msg);
 
                     for (std::vector<Scalar> & matched_row : matched) {
 
@@ -268,13 +264,10 @@ Vector2D  MyFunction(PyObject * obj1, PyObject * obj2, KeyStringListPair* obj3, 
                         SQLITE_RESET_AND_CHECK(db, insert_stmts[seq_len]);
                     }
                     
-                    sqlite3_exec(db, "COMMIT TRANSACTION", NULL, NULL, &err_msg);
-
                     empty[seq_len] = false;
                 }
             }
 
-            if(early_exit) break;
         }
 
         if (event_indices.find(event_names[0]) == event_indices.end() || event_indices[event_names[0]].find(global_row_count) != event_indices[event_names[0]].end()) {

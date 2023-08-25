@@ -3,15 +3,10 @@ import sqlite3
 import duckdb
 import pickle
 
-def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
-    
-    assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
-    if by is None:
-        assert batch[time_col].is_sorted(), "batch must be sorted by time_col"
-    else:
-        assert by in batch.columns
+# fix argument is ignored in this function as it returns everything by default, so no need to specify to match start or end.
+def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}, fix = "start"):
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals, row_count_mapping = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
 
     total_events = len(events)
 
@@ -136,20 +131,6 @@ def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}):
     print("TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts]))
     print("TOTAL FILTERED ROWS: ", sum([np.sum(length_dicts[key]) for key in length_dicts]))
 
-    if len(matched_events) > 0:
-
-        matched_events = [item for sublist in matched_events for item in sublist]
-        matched_events = batch[matched_events].select(["__row_count__", time_col, by]) if by is not None else batch[matched_events].select(["__row_count__", time_col])
-        
-        events = [matched_events[i::total_events] for i in range(total_events)]
-        for i in range(total_events):
-            if i != 0 and by is not None:
-                events[i] = events[i].drop(by)
-            events[i] = events[i].rename({"__row_count__" : event_names[i] + "___row_count__", time_col : event_names[i] + "_" + time_col})
-        matched_events = polars.concat(events, how = 'horizontal')
-        return matched_events
-    
-    else:
-        return None
+    return process_matched_events(batch, matched_events, row_count_mapping, event_names, time_col, by, total_events)
 
 

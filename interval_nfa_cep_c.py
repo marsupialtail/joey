@@ -72,13 +72,14 @@ def nfa_interval_cep_c(batch, events, time_col, max_span, by = None, event_udfs 
     else:
         assert by in batch.columns
 
-    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
+    batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals, row_count_mapping = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
 
     # assert event_indices[event_names[0]] != None, "this is for things with first event filter"
     total_events = len(event_names)
     data = batch.to_arrow()
     assert len(data) == len(batch)
-    lib = PyDLL('src/interval_nfa.cpython-37m-x86_64-linux-gpu.so')
+    # lib = PyDLL('src/interval_nfa.cpython-37m-x86_64-linux-gpu.so')
+    lib = PyDLL('src/nfa.cpython-37m-x86_64-linux-gnu.so')
     lib.MyFunction.argtypes = [py_object, py_object, POINTER(KeyStringListPair), POINTER(KeyStringListPair), POINTER(c_char_p), POINTER(DictEntry), c_int, c_int, c_char_p]
     lib.MyFunction.restype = Vector2D
     #print(lib._Z10MyFunctionP7_object(1))

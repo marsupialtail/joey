@@ -7,7 +7,7 @@ import polars
 from utils import verify
 from technical_indicators import *
 
-def evaluate(data, conditions, strategies, span, by = None, time_col = "timestamp", replace_dict = {}):
+def evaluate(data, conditions, strategies, span, by = None, time_col = "timestamp", replace_dict = {}, fix = "start"):
     """
 
     Look up some example use cases of this function in this file.
@@ -26,12 +26,15 @@ def evaluate(data, conditions, strategies, span, by = None, time_col = "timestam
                     condition[i] = (condition[i][0],condition[i][1].replace(key, str(replace_dict[key])))
 
         exepcted_length = None
+
+        unique_col = (condition[0][0] + "_" + time_col) if fix == "start" else (condition[-1][0] + "_" + time_col)
+
         for strategy_name, strategy in strategies:
             print("USING STRATEGY {}".format(strategy_name))
             if by is None:
-                results = strategy(data, condition, time_col, span, by= by).unique([condition[0][0] + "_" + time_col]).sort(condition[0][0] + "_" + time_col)
+                results = strategy(data, condition, time_col, span, by= by, fix = fix).unique([unique_col]).sort(unique_col)
             else:
-                results = strategy(data, condition, time_col, span, by= by).unique([condition[0][0] + "_" + time_col, by]).sort(by)
+                results = strategy(data, condition, time_col, span, by= by, fix = fix).unique([unique_col, by]).sort([by, unique_col])
             
             # make sure that all strategies return the same length at least
             if results is None:
@@ -84,7 +87,7 @@ def do_qqq_test():
 
     conditions = [ascending_triangles_conditions, v_conditions, cup_and_handle_conditions, heads_and_shoulders_conditions, flag_1]
     # strategies = [("test", nfa_interval_cep_c), ("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
-    strategies = [("test", nfa_interval_cep_c)]
+    strategies = [("nfa_cep", nfa_cep),("interval_nfa_cep", nfa_interval_cep),("interval_vector_cep", vector_interval_cep)]
     span = 7200
     by = None
     UPPER = 1.0025
@@ -113,7 +116,7 @@ def do_daily_qqq_test():
                     (polars.col("close") == polars.col("max_close")).alias("is_local_top")])
     daily_qqq = daily_qqq.rename({"row_count": "timestamp"})
 
-    conditions = [test_1, test_2, test_3]
+    conditions = [ascending_triangles_conditions, v_conditions, cup_and_handle_conditions, heads_and_shoulders_conditions, flag_1]
     strategies = [("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
     span = 60
     by = 'symbol'
@@ -135,14 +138,42 @@ def do_minutely_test():
 
     evaluate(minutely, conditions, strategies, span, by = by, replace_dict = {"UPPER": UPPER, "LOWER": LOWER})
 
+
+def do_mbo_test():
+
+    mbo = polars.read_parquet("data/qqq_mbo.parquet")
+
+    mbo = mbo.select(["ts_event","side","price","size","action","order_id"]).with_row_count()
+    mbo = mbo.with_columns([(polars.when(polars.col("action") == "T").then(polars.col("price")).otherwise(None)).forward_fill().alias("last_trade_price")])
+
+    layering = [
+        ('a', "a.action == 'A' and a.side == 'A' and a.price > a.last_trade_price * UPPER"),
+        ('b', "b.action == 'A' and b.side == 'A' and b.price > b.last_trade_price * UPPER and b.size == a.size and b.price != a.price"),
+        ('c', "c.action == 'A' and c.side == 'A' and c.price > c.last_trade_price * UPPER and c.size == a.size and c.price != b.price and c.price != a.price"),
+        ('d', "d.action == 'A' and d.side == 'A' and d.price > d.last_trade_price * UPPER and d.size == a.size and d.price != a.price and d.price != b.price and d.price != c.price"),
+    ]
+
+    spoofing = [
+        ('a', "a.action == 'A' and a.side == 'A' and a.price > a.last_trade_price * UPPER"),
+        ('b', "b.action == 'A' and b.side == 'A' and b.price > b.last_trade_price * UPPER and b.price != a.price"),
+        ('c', "c.action == 'A' and c.side == 'A' and c.price > c.last_trade_price * UPPER and c.price != b.price and c.price != a.price"),
+        ('d', "d.action == 'C' and d.side == 'A' and d.price in (a.price, b.price, c.price) and d.size in (a.size, b.size, c.size)"),
+        ('e', "e.action == 'C' and e.side == 'A' and e.price in (a.price, b.price, c.price) and e.size in (a.size, b.size, c.size)"),
+        ('f', "f.action == 'C' and f.side == 'A' and f.price in (a.price, b.price, c.price) and f.size in (a.size, b.size, c.size)"),
+    ]
+
+    conditions = [spoofing]
+
+    span = 300
+    by = None
+    UPPER = 1.001
+    LOWER = 0.999
+
+    evaluate(mbo, conditions, [ ("interval_nfa_cep", nfa_interval_cep)], span, time_col= "row_nr", by = by, replace_dict = {"UPPER": UPPER, "LOWER": LOWER})
+
 def hard_test():
     data = polars.read_parquet("data/testing.parquet")
-    conditions = [[('x0', 'x0.Low > x0.rolling_5d_mean'),
-        ('x1', 'x1.Low > x1.rolling_5d_mean and x1.date_ix = x0.date_ix + 1'),
-        ('x2', 'x2.Low > x2.rolling_5d_mean and x2.date_ix = x1.date_ix + 1'),
-        ('x3', 'x3.Low > x3.rolling_5d_mean and x3.date_ix = x2.date_ix + 1'),
-        ('x4', 'x4.Low > x4.rolling_5d_mean and x4.date_ix = x3.date_ix + 1'),
-        ('x5','x5.Close < x5.rolling_5d_mean and x5.date_ix = x4.date_ix + 1 and x5.date_ix = 51')]]
+    conditions = [test_1, test_2, test_3]
     
     strategies = [("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
 
@@ -152,3 +183,4 @@ do_qqq_test()
 # do_daily_qqq_test()
 # do_minutely_test()
 # hard_test()
+# do_mbo_test()

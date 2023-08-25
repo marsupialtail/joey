@@ -1,6 +1,6 @@
 import os
 os.environ["POLARS_MAX_THREADS"] = "1" 
-import polars, sqlglot
+import polars, sqlglot, duckdb
 import sqlglot.optimizer as optimizer
 from collections import deque
 from collections import namedtuple
@@ -11,9 +11,6 @@ import numpy as np
 
 def verify(data, results, conditions):
     # the results should have event_name__row_count__ column
-
-    prefilter, touched_columns, event_prefilters, event_predicates, event_required_columns = preprocess_conditions(conditions)
-    data = polars.SQLContext(frame=data).execute("select * from frame where {}".format(prefilter)).collect()
 
     all_predicate = ""
     events = []
@@ -26,11 +23,23 @@ def verify(data, results, conditions):
     
     events = polars.concat(events, how = "horizontal")
 
+    events.write_parquet("events.parquet")
+
     all_predicate = all_predicate[:-5]
     all_predicate = sqlglot.parse_one(all_predicate).transform(lambda node: sqlglot.exp.column(node.table + "_" + node.name) if isinstance(node, sqlglot.exp.Column) else node).sql()
-    if not polars.SQLContext(frame = events).execute("select count(*) from frame where {}".format(all_predicate)).collect()["count"][0] == len(results):
-        print("Verification failed, failed rows written to problem.parquet")
-        polars.SQLContext(frame = events).execute("select * from frame where not ({})".format(all_predicate)).collect().write_parquet("problem.parquet")
+    
+    print(all_predicate)
+
+    con = duckdb.connect()
+    events_arrow = events.to_arrow()
+    result = polars.from_arrow(con.execute("select count(*) from events_arrow where {}".format(all_predicate)).arrow())["count_star()"][0]
+    
+    if not result == len(results):
+        polars.from_arrow(con.execute("select * from events_arrow where not ({})".format(all_predicate)).arrow()).write_parquet("problem.parquet")
+
+    # if not polars.SQLContext(frame = events).execute("select count(*) from frame where {}".format(all_predicate)).collect()["count"][0] == len(results):
+    #     print("Verification failed, failed rows written to problem.parquet")
+    #     polars.SQLContext(frame = events).execute("select * from frame where not ({})".format(all_predicate)).collect().write_parquet("problem.parquet")
 
 def plot_candlesticks(prices):
     import matplotlib.pyplot as plt
@@ -156,6 +165,13 @@ def partial_any_arg(func, value_locs):
     return partial(wrapper)
 
 def preprocess_2(batch, events, time_col, by, udfs, max_span):
+
+    assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
+    if by is None:
+        assert batch[time_col].is_sorted(), "batch must be sorted by time_col"
+    else:
+        assert by in batch.columns
+
     event_names = [event for event, predicate in events]
     prefilter, touched_columns, event_prefilters, event_predicates, event_required_columns = preprocess_conditions(events)
 
@@ -221,9 +237,13 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
 
     # apply prefilter
 
-    batch = polars.SQLContext(frame=batch).execute("select {} from frame where {}".format(",".join(select_cols), prefilter)).collect()
+    batch = batch.with_row_count("__original_row_count__")
+
+    batch = polars.SQLContext(frame=batch).execute("select __original_row_count__, {} from frame where {}".format(",".join(select_cols), prefilter)).collect()
 
     batch = batch.with_row_count("__row_count__")
+    row_count_mapping = batch.select(["__original_row_count__", "__row_count__"])
+    batch = batch.drop(["__original_row_count__"])
 
     event_independent_columns = {event: [k.name for k in sqlglot.parse_one(predicate).find_all(sqlglot.exp.Column) if k.table == event] 
                                for event, predicate in events if predicate is not None}
@@ -285,4 +305,27 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
         polars.col("__row_count___right").alias("__crc__"),
     ])
     
-    return batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs, intervals
+    return batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns, event_udfs, intervals, row_count_mapping
+
+
+
+def process_matched_events(batch, matched_events, row_count_mapping, event_names, time_col, by, total_events):
+    if len(matched_events) > 0:
+
+        matched_events = [item for sublist in matched_events for item in sublist]
+        matched_events = batch[matched_events].select(["__row_count__", time_col, by]) if by is not None else batch[matched_events].select(["__row_count__", time_col])
+        
+        # use left join to preserve the order of matched_events.
+        
+        matched_events = matched_events.join(row_count_mapping, on = "__row_count__", how = "left").drop(["__row_count__"]).rename({"__original_row_count__": "__row_count__"})
+
+        events = [matched_events[i::total_events] for i in range(total_events)]
+        for i in range(total_events):
+            if i != 0 and by is not None:
+                events[i] = events[i].drop(by)
+            events[i] = events[i].rename({"__row_count__" : event_names[i] + "___row_count__", time_col : event_names[i] + "_" + time_col})
+        matched_events = polars.concat(events, how = 'horizontal')
+        return matched_events
+    
+    else:
+        return None
