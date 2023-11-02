@@ -28,7 +28,6 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
 
     partitioned = batch.partition_by(by, as_dict = True) if by is not None else {"dummy":batch}
 
-    matched_ends = []
     total_exec_times = []
     overhead = 0
 
@@ -59,9 +58,8 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
             end_nr = bound["__crc__"]
 
             # match recognize default is one pattern per start. we can change it to one pattern per end too
-            # if end_nr in matched_ends:
 
-            if start_nr in matched_ends or end_nr <= start_nr:
+            if end_nr <= start_nr:
                 continue
             fate = {event_names[0] + "_" + col : partition_tuples[start_nr - start_row_count][i] for i, col in enumerate(partition.columns)}
             stack = deque([(0, [fate], [start_nr])])
@@ -77,7 +75,7 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
                         next_event_filter = next_event_filter.replace(fixed_col, str(fate[fixed_col]))
                 
                 startt = time.time()
-                if next_event_name == event_names[-1]:
+                if next_event_name == event_names[-1] and fix == "start":
                     query = "select * from frame where __possible_{}__ and {} and __row_count__ > {} and __row_count__ <= {} limit 1".format(next_event_name, next_event_filter, start_nr + marker,end_nr )
                 else:
                     query = "select * from frame where __possible_{}__ and {} and __row_count__ > {} and __row_count__ <= {}".format(next_event_name, next_event_filter, start_nr + marker,end_nr )
@@ -88,9 +86,11 @@ def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs
                 
                 if len(matched) > 0:
                     if next_event_name == event_names[-1]:
-                        matched_ends.append(start_nr)
-                        matched_events.append(matched_event + [matched[0][row_count_idx]])
-                        break
+                        if fix == "end":
+                            matched_events.extend([matched_event + [i[row_count_idx]] for i in matched])
+                        else:
+                            matched_events.append(matched_event + [matched[0][row_count_idx]])
+                            break
                     else:
                         for matched_row in matched[::-1]:
                             my_fate = {next_event_name + "_" + partition.columns[i] : matched_row[i] for i in range(len(partition.columns))}

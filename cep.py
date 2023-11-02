@@ -93,7 +93,9 @@ def do_qqq_test():
     UPPER = 1.0025
     LOWER = 0.9975
 
-    evaluate(qqq, conditions, strategies, span, by = by, replace_dict = {"UPPER": UPPER, "LOWER": LOWER})
+    evaluate(qqq, conditions, strategies, span, by = by, replace_dict = {"UPPER": UPPER, "LOWER": LOWER}, fix = "start")
+    evaluate(qqq, conditions, strategies, span, by = by, replace_dict = {"UPPER": UPPER, "LOWER": LOWER}, fix = "end")
+
 
     
 def do_daily_qqq_test():

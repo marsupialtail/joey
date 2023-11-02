@@ -3,8 +3,6 @@ import sqlite3
 import duckdb
 import pickle
 
-
-
 def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = {}, fix = "start"):
 
     batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals, row_count_mapping = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
