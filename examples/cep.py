@@ -1,10 +1,7 @@
-from nfa_cep import nfa_cep
-from interval_nfa_cep import nfa_interval_cep
-from interval_vector_cep import vector_interval_cep
-from interval_nfa_cep_c import nfa_interval_cep_c
 import sqlglot
 import polars
-from utils import verify
+from pyjoey import nfa_cep, vector_interval_cep, nfa_interval_cep
+from pyjoey.utils import verify
 from technical_indicators import *
 
 def evaluate(data, conditions, strategies, span, by = None, time_col = "timestamp", replace_dict = {}, fix = "start"):
@@ -101,7 +98,7 @@ def do_qqq_test():
 def do_daily_qqq_test():
 
     daily_qqq = polars.read_parquet("data/daily.parquet")
-    filtered_symbols = daily_qqq.groupby("symbol").agg([polars.count(), polars.sum("volume")]).filter(polars.col("count") == 252).filter(polars.col("volume") > 1e8).select(["symbol"])
+    filtered_symbols = daily_qqq.group_by("symbol").agg([polars.count(), polars.sum("volume")]).filter(polars.col("count") == 252).filter(polars.col("volume") > 1e8).select(["symbol"])
     daily_qqq = filtered_symbols.join(daily_qqq, "symbol")
     daily_qqq = daily_qqq.sort(["symbol", "date"])
     daily_qqq = polars.concat([i.with_row_count("row_count") for i in daily_qqq.partition_by("symbol")]).with_columns(polars.col("row_count").cast(polars.Int64()))
@@ -181,8 +178,8 @@ def hard_test():
 
     evaluate(data, conditions, strategies, 6, by = "ID_ZZ", time_col = "date_ix")
 
-do_qqq_test()
-# do_daily_qqq_test()
+# do_qqq_test()
+do_daily_qqq_test()
 # do_minutely_test()
 # hard_test()
 # do_mbo_test()

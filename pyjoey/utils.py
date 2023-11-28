@@ -4,10 +4,8 @@ import polars, sqlglot, duckdb
 import sqlglot.optimizer as optimizer
 from collections import deque
 from collections import namedtuple
-from tqdm import tqdm
 import time
 from functools import partial
-import numpy as np
 
 def verify(data, results, conditions):
     # the results should have event_name__row_count__ column
@@ -251,7 +249,7 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
     event_rename_dicts = {event: {k.sql() : k.table + "_" + k.name for k in sqlglot.parse_one(predicate).find_all(sqlglot.exp.Column)} for event, predicate in events if predicate is not None}
     
     # we need to rename the predicates to use _ instead of . because polars doesn't support . in column names
-    event_predicates = [replace_with_dict(predicate, event_rename_dicts[event]) if (predicate is not None and predicate != 'TRUE') else None for event, predicate in event_predicates.items()]
+    event_predicates = [replace_with_dict(predicate, event_rename_dicts[event]) if (predicate is not None) else None for event, predicate in event_predicates.items()]
     # print(event_prefilters)
     # print(event_predicates)
     rename_dicts = {event: {col: event + "_" + col for col in batch.columns} for event in event_names}

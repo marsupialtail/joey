@@ -1,7 +1,8 @@
-from utils import * 
+from .utils import * 
 import sqlite3
-import duckdb
 import pickle
+from tqdm import tqdm
+import numpy as np
 
 def nfa_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = {}, fix = "start"):
 

@@ -1,4 +1,4 @@
-from utils import * 
+from .utils import * 
 import sqlite3
 import pickle
 from ctypes import *

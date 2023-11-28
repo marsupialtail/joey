@@ -1,7 +1,9 @@
-from utils import * 
+from .utils import * 
 import sqlite3
 import duckdb
 import pickle
+from tqdm import tqdm
+import numpy as np
 
 # fix argument is ignored in this function as it returns everything by default, so no need to specify to match start or end.
 def nfa_cep(batch, events, time_col, max_span, by = None, event_udfs = {}, fix = "start"):
