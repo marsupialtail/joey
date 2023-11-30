@@ -6,6 +6,7 @@ from collections import deque
 from collections import namedtuple
 import time
 from functools import partial
+from typing import List, Tuple, Dict, Callable, Any, Union, Optional
 
 def verify(data, results, conditions):
     # the results should have event_name__row_count__ column
@@ -72,6 +73,12 @@ def plot_candlesticks(prices):
 
     #display candlestick chart
     plt.show()
+
+def touched_columns(conditions):
+    result = set()
+    for event_name, condition in conditions:
+        result = result.union(set([i.name for i in sqlglot.parse_one(condition).find_all(sqlglot.expressions.Column)]))
+    return result
 
 def remove_qualifier(query):
     return sqlglot.parse_one(query).transform(lambda node: sqlglot.exp.column(node.this) if isinstance(node, sqlglot.exp.Column) else node).sql()
@@ -162,13 +169,16 @@ def partial_any_arg(func, value_locs):
 
     return partial(wrapper)
 
-def preprocess_2(batch, events, time_col, by, udfs, max_span):
+def preprocess_2(batch: polars.DataFrame, events: List[Tuple], time_col: str, by: Union[str, List,None], udfs: Dict[str,Callable], max_span: int):
 
     assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
     if by is None:
         assert batch[time_col].is_sorted(), "batch must be sorted by time_col"
     else:
-        assert by in batch.columns
+        if type(by) == str:
+            by = [by]
+        assert all([col in batch.columns for col in by]), "groupby columns must be in batch"
+        batch = batch.sort(by)
 
     event_names = [event for event, predicate in events]
     prefilter, touched_columns, event_prefilters, event_predicates, event_required_columns = preprocess_conditions(events)
@@ -231,7 +241,7 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
     # make sure these columns have a deterministic order  
     event_required_columns = {event: ["__row_count__"] + list(event_required_columns[event]) for event in event_names}
 
-    select_cols = touched_columns.union({time_col}) if by is None else touched_columns.union({time_col, by})
+    select_cols = touched_columns.union({time_col}) if by is None else touched_columns.union({time_col, *by})
 
     # apply prefilter
 
@@ -267,7 +277,7 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
                                                             format(time_col, event_name, event_prefilters[event_name])).collect()
             else:
                 event_indices[event_name] = polars.SQLContext().register(event_name, batch).execute("select __row_count__, {}, {} from {} where {}".
-                                                            format(time_col, by, event_name, event_prefilters[event_name])).collect()
+                                                            format(time_col, ",".join(by), event_name, event_prefilters[event_name])).collect()
         else:
             event_indices[event_name] = None
     
@@ -278,7 +288,7 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
             if event_indices[event_name] is not None:
                 # do the asof join to find the closest event to the first event
                 event_indices[event_names[0]] = event_indices[event_names[0]].join_asof(event_indices[event_name], on = "__row_count__", by = by, strategy = "forward")\
-                    .filter(polars.col(time_col + "_right") - polars.col(time_col) <= max_span).select(["__row_count__", time_col] + ([by] if by is not None else []))
+                    .filter(polars.col(time_col + "_right") - polars.col(time_col) <= max_span).select(["__row_count__", time_col] + (by if by is not None else []))
 
     for event_name in event_names:
         if event_prefilters[event_name] != "TRUE":
@@ -288,15 +298,15 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
 
     # compute intervals
     if event_indices[event_names[0]] is not None:
-        start_rows = batch.select(["__row_count__", time_col]+ ([by] if by is not None else [])).join(polars.from_dict({"row_nrs": list(event_indices[event_names[0]])}).
+        start_rows = batch.select(["__row_count__", time_col]+ (by if by is not None else [])).join(polars.from_dict({"row_nrs": list(event_indices[event_names[0]])}).
                             with_columns(polars.col("row_nrs").cast(polars.UInt32())), left_on = "__row_count__", right_on = "row_nrs", how = "semi")
     else:
         # likely to be slow, no filter on first event
-        start_rows = batch.select(["__row_count__", time_col]+ ([by] if by is not None else []))
+        start_rows = batch.select(["__row_count__", time_col]+ (by if by is not None else []))
     end_times = start_rows.with_columns(polars.col(time_col) + max_span)
     # perform as asof join to figure out the end_rows
     end_rows = end_times.set_sorted(time_col).\
-        join_asof(batch.select(["__row_count__", time_col] + ([by] if by is not None else [])).set_sorted(time_col), 
+        join_asof(batch.select(["__row_count__", time_col] + (by if by is not None else [])).set_sorted(time_col), 
                   left_on = time_col, right_on = time_col, strategy = "backward", by = by)
     intervals = end_rows.with_columns([
         polars.col("__row_count__").alias("__arc__"),
@@ -307,11 +317,15 @@ def preprocess_2(batch, events, time_col, by, udfs, max_span):
 
 
 
-def process_matched_events(batch, matched_events, row_count_mapping, event_names, time_col, by, total_events):
+def process_matched_events(batch: polars.DataFrame, matched_events, row_count_mapping, event_names, time_col, by: Union[str, List,None], total_events):
+    
+    if type(by) == str:
+        by = [by]
+    
     if len(matched_events) > 0:
 
         matched_events = [item for sublist in matched_events for item in sublist]
-        matched_events = batch[matched_events].select(["__row_count__", time_col, by]) if by is not None else batch[matched_events].select(["__row_count__", time_col])
+        matched_events = batch[matched_events].select(["__row_count__", time_col] + by) if by is not None else batch[matched_events].select(["__row_count__", time_col])
         
         # use left join to preserve the order of matched_events.
         

@@ -3,7 +3,13 @@ import sqlite3
 from tqdm import tqdm
 import numpy as np
 
-def vector_interval_cep(batch, events, time_col, max_span, by = None, event_udfs = {}, fix = "start"):
+def vector_interval_cep(batch: polars.DataFrame, 
+                        events: List[Tuple], 
+                        time_col: str, 
+                        max_span:int, 
+                        by: Optional[Union[str, List]] = None, 
+                        event_udfs = {}, 
+                        fix = "start"):
 
     batch, event_names, rename_dicts, event_predicates, event_indices, event_independent_columns, event_required_columns , event_udfs, intervals, row_count_mapping = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
     # this hack needs to be corrected, this basically makes all the {event_name}_{col_name} col names just {col_name} for the current event
