@@ -1,9 +1,11 @@
 import os
-os.environ["POLARS_MAX_THREADS"] = "1" 
+
+os.environ["POLARS_MAX_THREADS"] = "1"
 import polars
 import numpy as np
 import time
-n_rows_choices = [1,10,100,1000,10000,100000]
+
+n_rows_choices = [1, 10, 100, 1000, 10000, 100000]
 n_cols = 30
 n_select_choices = [8]
 times = {}
@@ -20,7 +22,9 @@ for n_rows in n_rows_choices:
 
         start = time.time()
         for i in range(1000):
-            polars.SQLContext(frame = a).execute("select {} from frame where {}".format(selected_cols, predicate)).collect()
+            polars.SQLContext(frame=a).execute(
+                "select {} from frame where {}".format(selected_cols, predicate)
+            ).collect()
         runtime = time.time() - start
         print(n_rows, n_select, runtime)
         times[(n_rows, n_select)] = runtime

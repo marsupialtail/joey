@@ -1,11 +1,11 @@
 import duckdb
 import numpy as np
 import polars
-import time 
+import time
 
-n_rows_choices = [1,10,100,1000,10000,100000,1000000]
+n_rows_choices = [1, 10, 100, 1000, 10000, 100000, 1000000]
 n_cols = 30
-n_select_choices = [1,2,4,8,16]
+n_select_choices = [1, 2, 4, 8, 16]
 times = {}
 cur = duckdb.connect()
 cur = cur.execute("PRAGMA threads=1;")
@@ -30,7 +30,9 @@ for n_rows in n_rows_choices:
         predicate = " and ".join(["col_{} > 500".format(i) for i in range(n_select)])
         start = time.time()
         for i in range(1000):
-            result = cur.execute("select {} from test where {}".format(selected_cols, predicate)).arrow()
+            result = cur.execute(
+                "select {} from test where {}".format(selected_cols, predicate)
+            ).arrow()
         runtime = time.time() - start
         print(n_rows, n_select, runtime)
         times[(n_rows, n_select)] = runtime
