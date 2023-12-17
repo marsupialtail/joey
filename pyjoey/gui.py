@@ -108,7 +108,9 @@ def render(table, extra_columns_in_results=[]):
     )
 
     limit_widget_description = widgets.HTML(
-        value="<b>Pattern length limit:</b><br> Timestamp of last event - first event must be smaller than this.<br> Analysis might be slow if this number is too big.",
+        value="""<b>Pattern length limit:</b><br> Timestamp of last event - first event must be smaller than this.
+        <br> Analysis might be slow if this number is too big.
+        <br> This uses the same unit as your integer timestamp column.""",
     )
 
     limit_widget = widgets.Text(
@@ -246,7 +248,7 @@ def render(table, extra_columns_in_results=[]):
                     )
                     .to_dicts()
                 )
-                events = {str(i["column_0"]): i["column_1"] for i in x}
+                events = {json.dumps(i["column_0"]): i["column_1"] for i in x}
 
                 # Example data using integer timestamps (e.g., hours)
                 categories = events.keys()
