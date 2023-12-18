@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-VERSION = "0.1.9"
+VERSION = "0.2.2"
 DESCRIPTION = "Joey"
 LONG_DESCRIPTION = """
 Event analytics. Very fast. Will eventually be merged into Quokka
