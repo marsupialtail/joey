@@ -2,8 +2,8 @@
 FROM python:3.9-slim
 
 # Install Voilà
-RUN pip3 install --no-cache-dir ipywidgets jupyterlab notebook voila
-RUN pip3 install pyjoey polars duckdb matplotlib
+RUN pip3 install --no-cache-dir ipywidgets jupyterlab notebook voila pandas polars duckdb matplotlib
+RUN pip3 install --no-cache-dir pyjoey
 
 # Set the working directory in the container
 WORKDIR /app

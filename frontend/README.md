@@ -2,7 +2,7 @@
 
 The Joey frontend interface lets you visually create patterns and analyze Parquet files. 
 
-First pull the Docker image:
+First pull the [Docker image](https://hub.docker.com/repository/docker/marsupialtail/joey_demo/general):
 
 docker pull marsupialtail/joey_demo:latest
 
