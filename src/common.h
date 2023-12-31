@@ -188,6 +188,21 @@ void bind_scalar_to_stmt(sqlite3_stmt* stmt, int j, Scalar item){
     }
 }
 
+void print_scalar(Scalar item) {
+    if (std::holds_alternative<int> (item)) {
+        std::cout << std::get<int>(item);
+    } else if (std::holds_alternative<long> (item)) {
+        std::cout << std::get<long>(item);
+    } else if (std::holds_alternative<double>(item)) {
+        std::cout << std::get<double>(item);
+    } else if (std::holds_alternative<std::string>(item)) {
+        std::cout << std::get<std::string>(item);
+    } else {
+        std::cout << "Unsupported type " << item.index() << std::endl;
+        exit(1);
+    }
+}
+
 Scalar recover_scalar_from_stmt(sqlite3_stmt* stmt, int col, std::shared_ptr<arrow::DataType> type) {
     Scalar value;
     switch(type->id()) {

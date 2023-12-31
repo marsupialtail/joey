@@ -79,6 +79,8 @@ def vector_interval_cep(
         else {"dummy": intervals}
     )
 
+    start_all = time.time()
+
     for key in tqdm(results) if by is not None else results:
         partition = partitioned[key]
         result = results[key]
@@ -163,6 +165,7 @@ def vector_interval_cep(
 
         cur = cur.execute("delete from frame")
 
+    print("total time {}".format(time.time() - start_all))
     print(
         "TIME SPENT IN FILTER {} {} ".format(
             sum(total_exec_times), len(total_exec_times)
@@ -171,13 +174,13 @@ def vector_interval_cep(
     for key in length_dicts:
         print(key, len(length_dicts[key]), np.mean(length_dicts[key]))
 
-    print(
-        "TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts])
-    )
-    print(
-        "TOTAL FILTERED ROWS: ",
-        sum([np.sum(length_dicts[key]) for key in length_dicts]),
-    )
+    # print(
+    #     "TOTAL FILTER EVENTS: ", sum([len(length_dicts[key]) for key in length_dicts])
+    # )
+    # print(
+    #     "TOTAL FILTERED ROWS: ",
+    #     sum([np.sum(length_dicts[key]) for key in length_dicts]),
+    # )
     print("OVERHEAD", overhead)
 
     return process_matched_events(

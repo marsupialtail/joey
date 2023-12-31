@@ -37,7 +37,8 @@ def nfa_interval_cep(
 
     total_filter_time = 0
     total_filter_times = {event_name: [] for event_name in event_names}
-    total_other_time = 0
+    total_hotspot1_time = 0
+    total_hotspot2_time = 0
 
     partitioned = (
         batch.partition_by(by, as_dict=True) if by is not None else {"dummy": batch}
@@ -69,16 +70,25 @@ def nfa_interval_cep(
         if by is not None
         else {"dummy": intervals}
     )
-
+    
+    start_all = time.time()
     for key in tqdm(results) if by is not None else results:
+
+        start = time.time()
         partition = partitioned[key]
-        result = results[key]
+        result = results[key].to_dicts()
 
         # this is expensive!
         partition_rows = partition.to_dicts()
-
         start_row_count = partition["__row_count__"][0]
-        for bound in tqdm(result.to_dicts()) if by is None else result.to_dicts():
+    
+        global_indices = {x: sorted([i for i in range(1, total_events) if event_indices[event_names[i]] is None or x in event_indices[event_names[i]]])
+                for x in partition['__row_count__'].to_list()}
+
+        total_hotspot2_time += time.time() - start
+
+        for bound in tqdm(result) if by is None else result:
+            
             start_nr = bound["__arc__"]
             end_nr = bound["__crc__"]
 
@@ -93,17 +103,18 @@ def nfa_interval_cep(
             empty = {seq_len: True for seq_len in range(1, total_events)}
             empty[0] = False
 
+            start_inner = time.time()
+
             for row in range(1, len(interval)):
+
                 global_row_count = interval[row]["__row_count__"]
-                this_row_can_be = [
-                    i
-                    for i in range(1, total_events)
-                    if event_indices[event_names[i]] is None
-                    or global_row_count in event_indices[event_names[i]]
-                ]
+                this_row_can_be = global_indices[global_row_count]
+
                 early_exit = False
 
-                for seq_len in sorted(this_row_can_be)[::-1]:
+                for seq_len in this_row_can_be[::-1]:
+
+                    start = time.time()
                     if empty[seq_len - 1]:
                         continue
 
@@ -115,8 +126,6 @@ def nfa_interval_cep(
                             event_names[seq_len] + "_" + col, str(interval[row][col])
                         )
 
-                    start = time.time()
-
                     matched = cur.execute(
                         "select * from matched_sequences_{} where {}".format(
                             seq_len - 1, predicate
@@ -125,7 +134,7 @@ def nfa_interval_cep(
 
                     length_dicts[event_names[seq_len]].append(1)
                     total_filter_time += time.time() - start
-                    total_filter_times[event_names[seq_len]].append(time.time() - start)
+                    # total_filter_times[event_names[seq_len]].append(time.time() - start)
 
                     # now horizontally concatenate your table against the matched
                     if len(matched) > 0:
@@ -161,14 +170,19 @@ def nfa_interval_cep(
                             )
                             empty[seq_len] = False
 
+
                 if early_exit:
                     break
 
             for event in range(total_events - 1):
                 cur = cur.execute("delete from matched_sequences_{}".format(event))
+        
+            total_hotspot1_time += time.time() - start_inner
 
+    print("TOTAL TIME {}".format(time.time() - start_all))
     print("TOTAL FILTER TIME {}".format(total_filter_time))
-    print("OVERHEAD", total_other_time)
+    print("hotspot 1 time {}".format(total_hotspot1_time))
+    print("hotspot 2 time {}".format(total_hotspot2_time))
     for key in length_dicts:
         print(key, len(length_dicts[key]), np.mean(length_dicts[key]))
 

@@ -67,7 +67,7 @@ def pack_dict(data):
     return key_value_pairs, num_keys
 
 
-def nfa_interval_cep_c(
+def vector_interval_cep_c(
     batch, events, time_col, max_span, by=None, event_udfs={}, fix="start"
 ):
     assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
@@ -89,13 +89,30 @@ def nfa_interval_cep_c(
         row_count_mapping,
     ) = preprocess_2(batch, events, time_col, by, event_udfs, max_span)
 
-    print(event_predicates)
+    total_events = len(event_names)
+
+    for i in range(1, total_events):
+        if event_indices[event_names[i]] == None:
+            batch = batch.with_columns(
+                polars.lit(True).alias("__possible_{}__".format(event_names[i]))
+            )
+            continue
+        event_df = polars.from_dict({"event_nrs": list(event_indices[event_names[i]])}
+        ).with_columns(
+            [
+                polars.col("event_nrs").cast(polars.UInt32()),
+                polars.lit(True).alias("__possible_{}__".format(event_names[i])),
+            ]
+        )
+        batch = batch.join(
+            event_df, left_on="__row_count__", right_on="event_nrs", how="left"
+        ).with_columns(polars.col("__possible_{}__".format(event_names[i])).fill_null(polars.lit(False)))
 
     # assert event_indices[event_names[0]] != None, "this is for things with first event filter"
-    total_events = len(event_names)
+    
     data = batch.to_arrow()
     assert len(data) == len(batch)
-    lib = PyDLL('src/interval_nfa.cpython-37m-x86_64-linux-gpu.so')
+    lib = PyDLL('src/interval_vector.cpython-37m-x86_64-linux-gpu.so')
     # lib = PyDLL("nfa.cpython-37m-x86_64-linux-gnu.so")
     lib.MyFunction.argtypes = [
         py_object,
@@ -103,62 +120,61 @@ def nfa_interval_cep_c(
         POINTER(KeyStringListPair),
         POINTER(KeyStringListPair),
         POINTER(c_char_p),
-        POINTER(DictEntry),
-        c_int,
         c_int,
         c_char_p,
     ]
     lib.MyFunction.restype = Vector2D
-    # print(lib._Z10MyFunctionP7_object(1))
 
-    # we are going to preprocess event_predicates to replace cols in event_independent_columns, i.e. cols in current event
-    # in each event_predicate with ?, in the order in which they appear
+    # we are going to preprocess event_predicates to replace cols from previous events with ?
+    # we need to find a better way to do this too, this is way too fragile.
+    # for example if the predicate is c_close < b_close * 0.999 and c_close > a_close * 1.001 on event c
+    # we want to produce c_close < ? * 0.999 AND c_close > ? * 1.001 while recording b_close and a_close as independent columns IN ORDER
 
+    event_bind_columns = {}
+    event_fate_columns = {event_names[i]: set() for i in range(total_events)}
+    
     for i in range(len(event_predicates)):
         if event_predicates[i] is not None:
-            possible_cols = set(event_independent_columns[event_names[i]])
-            all_col_indices = []
-            all_col_names = []
-            for col in possible_cols:
-                cols_indices = [
-                    m.start()
-                    for m in re.finditer(
-                        event_names[i] + "_" + col, event_predicates[i]
-                    )
-                ]
-                all_col_indices.extend(cols_indices)
-                all_col_names.extend([col] * len(cols_indices))
+            prior_columns = set([col.name for col in sqlglot.parse_one(event_predicates[i]).find_all(sqlglot.expressions.Column) 
+                             if col.name.split("_")[0] != event_names[i]])
 
-            sorted_col_names = [
-                x for _, x in sorted(zip(all_col_indices, all_col_names))
-            ]
-            for col in sorted_col_names:
-                event_predicates[i] = event_predicates[i].replace(
-                    event_names[i] + "_" + col, "?"
-                )
-            event_independent_columns[event_names[i]] = sorted_col_names
+            column_occurences = []
+            for col in prior_columns:
+                event_name = col.split("_")[0]
+                column_occurences.extend([(m.start(),col) for m in re.finditer(col, event_predicates[i])])
+                event_fate_columns[event_name].add("_".join(col.split("_")[1:]))
+
+            column_occurences = [i[1] for i in sorted(column_occurences)]
+            event_bind_columns[event_names[i]] = column_occurences
+
+            for col in prior_columns:
+                event_predicates[i] = event_predicates[i].replace(col, "?")
+            
+            for col in event_independent_columns[event_names[i]]:
+                event_predicates[i] = event_predicates[i].replace(event_names[i] + "_" + col, col)
+
         else:
-            event_independent_columns[event_names[i]] = []
+            event_bind_columns[event_names[i]] = [None]
 
-    event_required_columns_c, num_events = pack_dict(event_required_columns)
-    event_independent_columns_c, num_events = pack_dict(event_independent_columns)
+    event_fate_columns = {k: list(v) for k, v in event_fate_columns.items()}
+
+    event_bind_columns_c, num_events = pack_dict(event_bind_columns)
+    event_fate_columns_c, num_events = pack_dict(event_fate_columns)
+
     event_predicates_c = (ctypes.c_char_p * len(event_predicates))(
         *[
             s.encode("utf-8") if s is not None else "None".encode("utf-8")
             for s in event_predicates
         ]
     )
-    event_indices_c, num_indices = pack_dict2(event_indices)
 
     data = lib.MyFunction(
         data,
         intervals.select(["__arc__", "__crc__"]).to_arrow(),
-        event_required_columns_c,
-        event_independent_columns_c,
+        event_bind_columns_c,
+        event_fate_columns_c,
         event_predicates_c,
-        event_indices_c,
         num_events,
-        num_indices,
         time_col.encode("utf-8"),
     )
 
@@ -193,5 +209,5 @@ def nfa_interval_cep_c(
         matched_events = polars.concat(events, how="horizontal")
         return matched_events
 
-    # else:
-    #     return None
+    else:
+        return None

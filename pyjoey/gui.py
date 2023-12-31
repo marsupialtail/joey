@@ -74,7 +74,7 @@ def display_timeline(table, result, groupby_cols, ts_column, conditions):
     # Example data using integer timestamps (e.g., hours)
     categories = list(events.keys())
 
-    fig, ax = plt.subplots(figsize=(20, max(len(result) // 5, 5)))
+    fig, ax = plt.subplots(figsize=(20, max(len(categories) * 2, 5)))
 
     # Height of each box
     box_height = 0.4
