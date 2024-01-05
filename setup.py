@@ -1,13 +1,13 @@
-import os
+import os, sys
 from setuptools import setup, find_packages, Extension
-
+import pyarrow
 os.environ["CC"] = "g++"
 os.environ["CXX"] = "g++"
 
 # Define the paths for Arrow and Python
-ARROW_PATH = "/home/ziheng/miniconda3/envs/quokka-dev/lib/python3.8/site-packages/pyarrow"
-PYTHON_PATH = "/home/ziheng/miniconda3/envs/quokka-dev"
-PYTHON_VERSION = "3.8"
+ARROW_PATH = pyarrow.__file__.replace("/__init__.py", "")
+PYTHON_PATH = sys.executable.replace("/bin/python3", "")
+PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
 
 # Compiler and linker flags
 extra_compile_args = ['-O3', '-g', '-fPIC', '-std=c++17', f'-I{ARROW_PATH}/include/', f'-I{PYTHON_PATH}/include/python{PYTHON_VERSION}']

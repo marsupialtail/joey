@@ -3,6 +3,7 @@ requires = [
     "setuptools>=42",
     "wheel",
     "Cython",  # Add this only if you are using Cython
+    "pyarrow"
 ]
 build-backend = "setuptools.build_meta"
 
