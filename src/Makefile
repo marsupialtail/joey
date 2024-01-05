@@ -4,7 +4,7 @@ ARROW=/home/ziheng/miniconda3/envs/quokka-dev/lib/python3.8/site-packages/pyarro
 PYTHON=/home/ziheng/miniconda3/envs/quokka-dev
 PYTHON_VERSION=3.8
 CFLAGS = -O3 -g -fPIC -I$(ARROW)/include/ -I$(PYTHON)/include/python$(PYTHON_VERSION) -std=c++17
-LDFLAGS = -shared -B $(PYTHON)/compiler_compat -L$(PYTHON)/lib -Wl,-rpath=$(PYTHON)/lib 
+LDFLAGS = -shared -B $(PYTHON)/compiler_compat -L$(PYTHON)/lib -Wl,-rpath,$(PYTHON)/lib 
 LIBS = -L$(ARROW) -l:libarrow.so -l:libarrow_python.so -l:libpython$(PYTHON_VERSION).so -lsqlite3
 # LIBS = -L$(ARROW) -l:libarrow.so -l:libarrow_python.so -lsqlite3
 
