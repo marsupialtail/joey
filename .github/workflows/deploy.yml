@@ -26,7 +26,8 @@ jobs:
         env:
           CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-*"
           CIBW_REPAIR_WHEEL_COMMAND: >
-            ./set_env.sh
+            echo $(which python)
+            export LD_LIBRARY_PATH=$(python -c 'import pyarrow; print(pyarrow.__path__[0])')
             auditwheel repair -w {dest_dir} {wheel}
       - uses: actions/upload-artifact@v4
         with:
