@@ -1,5 +1,5 @@
 #!/bin/bash
-
+pip3 install pyarrow
 # Locate the PyArrow installation directory
 PYARROW_PATH=$(python -c 'import pyarrow; print(pyarrow.__path__[0])')
 
