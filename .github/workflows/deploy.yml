@@ -25,8 +25,9 @@ jobs:
         uses: pypa/cibuildwheel@v2.16.2
         env:
           CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-*"
-          CIBW_BEFORE_BUILD: "./pre_build_script.sh"
-
+          CIBW_REPAIR_WHEEL_COMMAND: >
+            ./set_env.sh
+            auditwheel repair -w {dest_dir} {wheel}
       - uses: actions/upload-artifact@v4
         with:
           name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
