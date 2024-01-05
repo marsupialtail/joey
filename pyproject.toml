@@ -1,0 +1,35 @@
+[build-system]
+requires = [
+    "setuptools>=42",
+    "wheel",
+    "Cython",  # Add this only if you are using Cython
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyjoey"
+version = "0.2.3"
+authors = [{ name = "Tony Wang", email = "zihengw@stanford.edu" }]
+description = "Event analytics. Very fast. Will eventually be merged into Quokka"
+readme = "README.md"
+requires-python = ">=3.6"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "duckdb",
+    "pyarrow>=7.0.0",
+    "sqlglot>=17.8.0",
+    "tqdm>=4.65.0",
+    "polars>=0.18.0"
+]
+
+[tool.cibuildwheel]
+# Configure cibuildwheel here, if needed
+
+# Define custom environment variables if needed
+[tool.cibuildwheel.environment]
+CIBW_BEFORE_BUILD = "pip install pyarrow"  # Example: installing cmake before build
+

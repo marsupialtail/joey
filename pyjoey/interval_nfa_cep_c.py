@@ -95,8 +95,8 @@ def nfa_interval_cep_c(
     total_events = len(event_names)
     data = batch.to_arrow()
     assert len(data) == len(batch)
-    lib = PyDLL('src/interval_nfa.cpython-37m-x86_64-linux-gpu.so')
-    # lib = PyDLL("nfa.cpython-37m-x86_64-linux-gnu.so")
+    lib = PyDLL('src/interval_nfa.so')
+    # lib = PyDLL("nfa.so")
     lib.MyFunction.argtypes = [
         py_object,
         py_object,

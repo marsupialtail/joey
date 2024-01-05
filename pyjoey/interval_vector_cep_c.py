@@ -66,9 +66,22 @@ def pack_dict(data):
 
     return key_value_pairs, num_keys
 
-
 def vector_interval_cep_c(
     batch, events, time_col, max_span, by=None, event_udfs={}, fix="start"
+):
+    return _interval_cep_c(
+        "vector", batch, events, time_col, max_span, by, event_udfs, fix
+    )
+
+def dfs_interval_cep_c(
+    batch, events, time_col, max_span, by=None, event_udfs={}, fix="start"
+):
+    return _interval_cep_c(
+        "dfs", batch, events, time_col, max_span, by, event_udfs, fix
+    )
+
+def _interval_cep_c(
+    method, batch, events, time_col, max_span, by=None, event_udfs={}, fix="start"
 ):
     assert type(batch) == polars.DataFrame, "batch must be a polars DataFrame"
     if by is None:
@@ -91,31 +104,40 @@ def vector_interval_cep_c(
 
     total_events = len(event_names)
 
+    event_frames = [batch.select(['__row_count__', 'timestamp', 'close']).to_arrow()]
+
     for i in range(1, total_events):
+        local_batch = batch.select(['__row_count__', 'timestamp', 'close'])
         if event_indices[event_names[i]] == None:
-            batch = batch.with_columns(
-                polars.lit(True).alias("__possible_{}__".format(event_names[i]))
+            event_frames.append(local_batch.to_arrow())
+        else:
+            possible_col = f"__possible_{event_names[i]}__"
+            event_df = polars.from_dict({"event_nrs": list(event_indices[event_names[i]])}
+            ).with_columns(
+                [
+                    polars.col("event_nrs").cast(polars.UInt32()),
+                    polars.lit(True).alias(possible_col),
+                ]
             )
-            continue
-        event_df = polars.from_dict({"event_nrs": list(event_indices[event_names[i]])}
-        ).with_columns(
-            [
-                polars.col("event_nrs").cast(polars.UInt32()),
-                polars.lit(True).alias("__possible_{}__".format(event_names[i])),
-            ]
-        )
-        batch = batch.join(
-            event_df, left_on="__row_count__", right_on="event_nrs", how="left"
-        ).with_columns(polars.col("__possible_{}__".format(event_names[i])).fill_null(polars.lit(False)))
+            frame = local_batch.join(
+                event_df, left_on="__row_count__", right_on="event_nrs", how="left"
+            ).filter(polars.col(possible_col)).sort("__row_count__")
+            event_frames.append(frame.drop(possible_col).to_arrow())
+    
+    array_type = ctypes.py_object * len(event_frames)
+    event_frames_c = array_type(*event_frames)
 
     # assert event_indices[event_names[0]] != None, "this is for things with first event filter"
     
-    data = batch.to_arrow()
-    assert len(data) == len(batch)
-    lib = PyDLL('src/interval_vector.cpython-37m-x86_64-linux-gpu.so')
-    # lib = PyDLL("nfa.cpython-37m-x86_64-linux-gnu.so")
+    if method == "vector":
+        lib = PyDLL('src/interval_vector.so')
+    elif method == "dfs":
+        lib = PyDLL('src/interval_dfs.so')
+    else:
+        raise NotImplementedError
+
     lib.MyFunction.argtypes = [
-        py_object,
+        POINTER(py_object),
         py_object,
         POINTER(KeyStringListPair),
         POINTER(KeyStringListPair),
@@ -169,7 +191,7 @@ def vector_interval_cep_c(
     )
 
     data = lib.MyFunction(
-        data,
+        event_frames_c,
         intervals.select(["__arc__", "__crc__"]).to_arrow(),
         event_bind_columns_c,
         event_fate_columns_c,

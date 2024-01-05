@@ -24,29 +24,14 @@ Vector2D MyFunction(PyObject *obj1, PyObject *obj2, KeyStringListPair *obj3,
     throw 0;
   }
   assert(arrow::py::is_table(obj1));
-  assert(arrow::py::is_table(obj2));
   arrow::Result<std::shared_ptr<arrow::Table>> result1 =
       arrow::py::unwrap_table(obj1);
-  arrow::Result<std::shared_ptr<arrow::Table>> result2 =
-      arrow::py::unwrap_table(obj2);
   assert(result1.ok());
-  assert(result2.ok());
   std::vector<std::string> column_names = result1.ValueOrDie()->ColumnNames();
   std::shared_ptr<arrow::RecordBatch> batch =
       result1.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
-  std::shared_ptr<arrow::RecordBatch> intervals =
-      result2.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
 
-  std::vector<std::tuple<size_t, size_t>> start_end = {};
-  for (size_t i = 0; i < intervals->num_rows(); i++) {
-    start_end.push_back(
-        std::make_tuple(std::static_pointer_cast<arrow::UInt32Array>(
-                            intervals->GetColumnByName("__arc__"))
-                            ->Value(i),
-                        std::static_pointer_cast<arrow::UInt32Array>(
-                            intervals->GetColumnByName("__crc__"))
-                            ->Value(i)));
-  }
+  std::vector<std::tuple<size_t, size_t>> start_end = convert_intervals_to_start_end(obj2);
 
   std::map<std::string, std::vector<std::string>> event_required_columns =
       processDict(obj3, num_events);
@@ -264,8 +249,10 @@ Vector2D MyFunction(PyObject *obj1, PyObject *obj2, KeyStringListPair *obj3,
 
         auto start_filter = std::chrono::high_resolution_clock::now();
         filter_calls ++;
+
         std::vector<std::vector<Scalar>> matched = {};
         while (sqlite3_step(filter_stmts[seq_len - 1]) == SQLITE_ROW) {
+          filter_output_total_rows ++;
           std::vector<Scalar> row = {};
           for (int col = 0;
                col < sqlite3_column_count(filter_stmts[seq_len - 1]); col++) {
@@ -361,6 +348,9 @@ Vector2D MyFunction(PyObject *obj1, PyObject *obj2, KeyStringListPair *obj3,
 
   auto end_time = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = end_time - start_time;
+  std::cout << "Number of intervals " << start_end.size() << std::endl;
+  std::cout << "Filter total calls " << filter_calls << std::endl;
+  std::cout << "Filter output total rows " << filter_output_total_rows << std::endl;
   std::cout << "Loop elapsed time: " << elapsed.count() << " s\n";
   std::cout << "Filter elapsed time: " << filter_time.count() << " s\n";
   std::cout << "Bind elapsed time: " << bind_time.count() << " s\n";

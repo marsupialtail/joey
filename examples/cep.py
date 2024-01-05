@@ -1,6 +1,6 @@
 import sqlglot
 import polars
-from pyjoey import nfa_cep, vector_interval_cep, nfa_interval_cep, nfa_interval_cep_c
+from pyjoey import nfa_cep, vector_interval_cep, nfa_interval_cep,  nfa_interval_cep_c, vector_interval_cep_c, dfs_interval_cep_c
 from pyjoey.utils import verify
 from technical_indicators import *
 
@@ -46,11 +46,10 @@ def evaluate(
         for strategy_name, strategy in strategies:
             print("USING STRATEGY {}".format(strategy_name))
             if by is None:
-                results = (
-                    strategy(data, condition, time_col, span, by=by, fix=fix)
-                    .unique([unique_col])
-                    .sort(unique_col)
-                )
+                results = strategy(data, condition, time_col, span, by=by, fix=fix)
+                if results is not None:
+                    results = results.unique([unique_col]).sort(unique_col)
+                
             else:
                 results = (
                     strategy(data, condition, time_col, span, by=by, fix=fix)
@@ -80,9 +79,10 @@ def evaluate(
                         )
 
             print(results)
-            results.write_parquet(strategy_name + ".parquet")
-            # make sure that the things returned match the predicate
-            verify(data, results, condition)
+            if results is not None:
+                results.write_parquet(strategy_name + ".parquet")
+                # make sure that the things returned match the predicate
+                verify(data, results, condition)
 
 
 # Tests on Crimes dataset
@@ -151,19 +151,25 @@ def do_qqq_test():
     )
 
     conditions = [
-        ascending_triangles_conditions,
-        v_conditions,
-        cup_and_handle_conditions,
-        heads_and_shoulders_conditions,
-        flag_1,
+        pathology,
+        # sharp_ascend,
+        # ascending_triangles_conditions,
+        # v_conditions,
+        # cup_and_handle_conditions,
+        # heads_and_shoulders_conditions,
+        # flag_1,
     ]
     # strategies = [("test", nfa_interval_cep_c), ("nfa_cep", nfa_cep), ("interval_vector_cep", vector_interval_cep), ("interval_nfa_cep", nfa_interval_cep)]
     strategies = [
-        ("nfa_cep", nfa_cep),
-        ("interval_nfa_cep", nfa_interval_cep),
-        ("interval_vector_cep", vector_interval_cep),
+        ("vec", vector_interval_cep_c),
+        ("dfs", dfs_interval_cep_c),
+        ("nfa", nfa_interval_cep_c),
+        # ("nfa_cep", nfa_cep),
+        # ("interval_nfa_cep", nfa_interval_cep),
+        # ("interval_nfa_cep_duck", nfa_interval_cep_duck),
+        # ("interval_vector_cep", vector_interval_cep),
     ]
-    span = 7200
+    span = 28800
     by = None
     UPPER = 1.0025
     LOWER = 0.9975
@@ -177,15 +183,15 @@ def do_qqq_test():
         replace_dict={"UPPER": UPPER, "LOWER": LOWER},
         fix="start",
     )
-    evaluate(
-        qqq,
-        conditions,
-        strategies,
-        span,
-        by=by,
-        replace_dict={"UPPER": UPPER, "LOWER": LOWER},
-        fix="end",
-    )
+    # evaluate(
+    #     qqq,
+    #     conditions,
+    #     strategies,
+    #     span,
+    #     by=by,
+    #     replace_dict={"UPPER": UPPER, "LOWER": LOWER},
+    #     fix="end",
+    # )
 
 
 def do_daily_qqq_test():

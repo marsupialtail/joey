@@ -141,6 +141,26 @@ std::map<std::string, std::vector<std::string>> processDict(const KeyStringListP
     return result;
 }
 
+std::vector<std::tuple<size_t, size_t>> convert_intervals_to_start_end(PyObject *obj) {
+    assert(arrow::py::is_table(obj));
+    arrow::Result<std::shared_ptr<arrow::Table>> result2 =
+        arrow::py::unwrap_table(obj);
+    assert(result2.ok());
+    std::shared_ptr<arrow::RecordBatch> intervals =
+        result2.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
+    std::vector<std::tuple<size_t, size_t>> start_end = {};
+    for (size_t i = 0; i < intervals->num_rows(); i++) {
+        start_end.push_back(
+            std::make_tuple(std::static_pointer_cast<arrow::UInt32Array>(
+                                intervals->GetColumnByName("__arc__"))
+                                ->Value(i),
+                            std::static_pointer_cast<arrow::UInt32Array>(
+                                intervals->GetColumnByName("__crc__"))
+                                ->Value(i)));
+    }
+    return start_end;
+}
+
 std::vector<std::string> processList(const char** pairs, int num_keys) {
     std::vector<std::string> list;
     for (int i = 0; i < num_keys; i++) {
@@ -186,6 +206,19 @@ void bind_scalar_to_stmt(sqlite3_stmt* stmt, int j, Scalar item){
         std::cout << "Unsupported type " << item.index() << std::endl;
         exit(1);
     }
+}
+
+size_t extract_row_count_from_scalar(Scalar s) {
+    size_t row_count = -1;
+    if (std::holds_alternative<int>(s)) {
+        row_count = std::get<int>(s);
+    } else if (std::holds_alternative<long>(s)) {
+        row_count = std::get<long>(s);
+    } else {
+        std::cout << "error: row count type not understood" << std::endl;
+        exit(1);
+    }
+    return row_count;
 }
 
 void print_scalar(Scalar item) {

@@ -1,11 +1,25 @@
 v_conditions = [
     ("a", "a.is_local_top"),
-    ("b", "b.is_local_bottom and b.close < a.close * LOWER"),
+    # ("b", "b.is_local_bottom and b.close < a.close * LOWER"),
+    ("b", "b.close < a.close * 0.98"),
     ("c", "c.close > a.close"),
+]
+
+pathology = [
+    ("a", "a.is_local_bottom"),
+    ("b", "b.close > a.close * UPPER and b.timestamp > a.timestamp + 7200"),
+    ("c", "c.close < b.close * LOWER and c.timestamp > b.timestamp + 7200")
+]
+
+sharp_ascend = [
+    ("a", "a.is_local_bottom"),
+    ("b", "b.close > a.close * UPPER"),
+    ("c", "c.close > b.close * UPPER"),
 ]
 
 ascending_triangles_conditions = [
     ("a", "a.is_local_bottom"),  # first bottom
+    # ("a", "a.close > 0"),
     ("b", """b.is_local_top and b.close > a.close * UPPER"""),  # first top
     (
         "c",

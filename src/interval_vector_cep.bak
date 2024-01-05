@@ -3,8 +3,22 @@
 
 typedef std::map<std::string, Scalar> fate_t;
 
+size_t extract_row_count_from_scalar(Scalar s) {
+    size_t row_count = -1;
+    if (std::holds_alternative<int>(s)) {
+        row_count = std::get<int>(s);
+    } else if (std::holds_alternative<long>(s)) {
+        row_count = std::get<long>(s);
+    } else {
+        std::cout << "error: row count type not understood" << std::endl;
+        exit(1);
+    }
+    return row_count;
+}
+
+
 extern "C" {
-Vector2D MyFunction(PyObject ** obj_array, 
+Vector2D MyFunction(PyObject *obj1, 
                     PyObject *obj2, 
                     KeyStringListPair *obj3,
                     KeyStringListPair *obj4,
@@ -29,81 +43,89 @@ Vector2D MyFunction(PyObject ** obj_array,
     std::cout << "problem initializing pyarrow" << std::endl;
     throw 0;
   }
+  assert(arrow::py::is_table(obj1));
+  assert(arrow::py::is_table(obj2));
+  arrow::Result<std::shared_ptr<arrow::Table>> result1 =
+      arrow::py::unwrap_table(obj1);
+  arrow::Result<std::shared_ptr<arrow::Table>> result2 =
+      arrow::py::unwrap_table(obj2);
+  assert(result1.ok());
+  assert(result2.ok());
+  std::vector<std::string> column_names = result1.ValueOrDie()->ColumnNames();
+  
+  std::shared_ptr<arrow::RecordBatch> batch =
+      result1.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
+  std::shared_ptr<arrow::RecordBatch> intervals =
+      result2.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
 
-  std::map<int , std::vector<std::string>> column_names = {};
-  std::map<int , std::map<std::string, size_t>> column_name_to_pos = {};
-  std::map<std::string, std::shared_ptr<arrow::DataType>> types = {};
-  std::map<int, size_t> row_count_indices = {};
-  std::vector<std::vector<Scalar>> transposed_batch;
+  std::map<std::string, size_t> column_name_to_pos = {};
+  std::vector<std::shared_ptr<arrow::DataType>> types = {};
 
-  for (int i = 0; i < num_events; i ++) {
-    assert(arrow::py::is_table(obj_array[i]));
-    arrow::Result<std::shared_ptr<arrow::Table>> result = 
-        arrow::py::unwrap_table(obj_array[i]);
-    assert(result.ok());
-    std::shared_ptr<arrow::RecordBatch> batch = 
-        result.ValueOrDie()->CombineChunksToBatch().ValueOrDie();
-    
-    column_names[i] = result.ValueOrDie()->ColumnNames();
-    column_name_to_pos[i] = {};
-
-    for (size_t j = 0; j < column_names[i].size(); j++) {
-        column_name_to_pos[i][column_names[i][j]] = batch->schema()->GetFieldIndex(
-            column_names[i][j]);
-        types[column_names[i][j]] = batch->schema()->GetFieldByName(column_names[i][j])->type();
-    }
-    row_count_indices[i] = column_name_to_pos[i].at("__row_count__");
-
-    
-    std::vector<std::vector<Scalar>> local_batch =
-      transpose_arrow_batch(batch);
-
-    if (i == 0) {
-        transposed_batch = std::move(local_batch);
-    } else {
-        std::string sql = "CREATE TABLE frame" + std::to_string(i) + "(";
-        for (int j = 0; j < column_names[i].size(); j++) {
-            sql += column_names[i][j] + " ANY, ";
-        }
-        sql = sql.substr(0, sql.size() - 2);
-        sql += ");";
-        SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
-        
-        sql = "create index idx" + std::to_string(i) + " on frame" + std::to_string(i) + "(__row_count__);";
-        SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
-
-        sqlite3_stmt * insert_stmt;
-        sql = "insert into frame" + std::to_string(i) + " values(";
-        for (int j = 0; j < column_names[i].size(); j++) {
-            sql += "?, ";
-        }
-        sql = sql.substr(0, sql.size() - 2);
-        sql += ");";
-        
-        SQLITE_PREPARE_AND_CHECK(db, sql, insert_stmt);
-        // now push the entire table into the database
-        for (size_t pos = 0; pos < local_batch.size(); pos++) {
-            for (int j = 0; j < column_names[i].size(); j++) {
-                bind_scalar_to_stmt(insert_stmt, j + 1, local_batch[pos][j]);
-            }
-            SQLITE_STEP_AND_CHECK(db, insert_stmt);
-            SQLITE_RESET_AND_CHECK(db, insert_stmt);
-        }
-        
-        sqlite3_finalize(insert_stmt);
-    }
-
+  for (size_t i = 0; i < column_names.size(); i++) {
+    column_name_to_pos[column_names[i]] = batch->schema()->GetFieldIndex(
+        column_names[i]);
+    types.push_back(batch->schema()->GetFieldByName(column_names[i])->type());
   }
 
-  std::vector<std::tuple<size_t, size_t>> start_end = convert_intervals_to_start_end(obj2);
-  std::map<std::string, std::vector<std::string>> event_bind_columns = processDict(obj3, num_events);
-  std::map<std::string, std::vector<std::string>> event_fate_columns = processDict(obj4, num_events);
+  size_t row_count_idx = column_name_to_pos.at("__row_count__");
+
+  std::vector<std::tuple<size_t, size_t>> start_end = {};
+  for (size_t i = 0; i < intervals->num_rows(); i++) {
+    start_end.push_back(
+        std::make_tuple(std::static_pointer_cast<arrow::UInt32Array>(
+                            intervals->GetColumnByName("__arc__"))
+                            ->Value(i),
+                        std::static_pointer_cast<arrow::UInt32Array>(
+                            intervals->GetColumnByName("__crc__"))
+                            ->Value(i)));
+  }
+
+  std::vector<std::vector<Scalar>> transposed_batch =
+      transpose_arrow_batch(batch);
+  
+  std::map<std::string, std::vector<std::string>> event_bind_columns =
+      processDict(obj3, num_events);
+  std::map<std::string, std::vector<std::string>> event_fate_columns =
+      processDict(obj4, num_events);
   std::vector<std::string> event_predicates = processList(obj5, num_events);
+  // put the keys of event_required_columns into a vector
   std::vector<std::string> event_names = {};
   for (auto const &element : event_bind_columns) {
     event_names.push_back(element.first);
   }
+
   
+  std::string sql = "CREATE TABLE frame(";
+  for (int i = 0; i < column_names.size(); i++) {
+        sql += column_names[i] + " ANY, ";
+  }
+  sql = sql.substr(0, sql.size() - 2);
+  sql += ");";
+  SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
+  
+  sql = "create index idx on frame(__row_count__);";
+  SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
+
+  sqlite3_stmt * insert_stmt;
+  sql = "insert into frame values(";
+  for (int i = 0; i < column_names.size(); i++) {
+    sql += "?, ";
+  }
+  sql = sql.substr(0, sql.size() - 2);
+  sql += ");";
+  
+  SQLITE_PREPARE_AND_CHECK(db, sql, insert_stmt);
+  // now push the entire table into the database
+  for (size_t pos = 0; pos < transposed_batch.size(); pos++) {
+      for (int i = 0; i < column_names.size(); i++) {
+        bind_scalar_to_stmt(insert_stmt, i + 1, transposed_batch[pos][i]);
+      }
+      SQLITE_STEP_AND_CHECK(db, insert_stmt);
+      SQLITE_RESET_AND_CHECK(db, insert_stmt);
+  }
+  
+  sqlite3_finalize(insert_stmt);
+
   // temp tables do not improve performance
 
   std::vector<sqlite3_stmt *> filter_stmts(event_names.size() - 1);
@@ -111,12 +133,19 @@ Vector2D MyFunction(PyObject ** obj_array,
     // the first event predicate should be None. All following event predicates
     // should NOT be None
     std::string predicate = event_predicates[event];
-    std::string sql;
-    if (event == event_names.size() - 1) {
-        sql = "SELECT * FROM frame" + std::to_string(event) + " WHERE " + predicate + " and __row_count__ > ? and __row_count__ < ? limit 1;";
-    } else {
-        sql = "SELECT * FROM frame" + std::to_string(event) + " WHERE " + predicate + " and __row_count__ > ? and __row_count__ < ?;";
-    }
+      std::string sql = "SELECT ";
+      for (int i = 0; i < column_names.size(); i++) {
+         // only add it if "__possible__" is not in the column name
+          if (column_names[i].find("__possible_") == std::string::npos) {
+              sql += column_names[i] + ", ";
+          }      
+      }
+      sql = sql.substr(0, sql.size() - 2);
+      sql += " FROM frame WHERE __possible_" + event_names[event] +
+        "__ and " + predicate + " and __row_count__ > ? and __row_count__ < ?;";
+      
+    // std::string sql = "SELECT * FROM frame WHERE __possible_" + event_names[event] +
+    //     "__ and " + predicate + " and __row_count__ > ? and __row_count__ < ?;";
     std::cout << sql << std::endl;
     SQLITE_PREPARE_AND_CHECK(db, sql, filter_stmts[event - 1]);
   }
@@ -134,7 +163,7 @@ Vector2D MyFunction(PyObject ** obj_array,
   
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  size_t start_row_count = extract_row_count_from_scalar(transposed_batch[0][row_count_indices[0]]);  
+  size_t start_row_count = extract_row_count_from_scalar(transposed_batch[0][row_count_idx]);  
 
   for (std::tuple<size_t, size_t> &start_end_pair : start_end) {
 
@@ -146,7 +175,7 @@ Vector2D MyFunction(PyObject ** obj_array,
 
     fate_t fate = {};
     for (std::string & col: event_fate_columns[event_names[0]]) {
-        fate[event_names[0] + "_" + col] = transposed_batch[start - start_row_count][column_name_to_pos[0][col]];
+        fate[event_names[0] + "_" + col] = transposed_batch[start - start_row_count][column_name_to_pos[col]];
     }
 
     std::vector<size_t> first_matched_event = {start};
@@ -165,7 +194,6 @@ Vector2D MyFunction(PyObject ** obj_array,
         std::vector<size_t> & matched_event = std::get<2>(state);
 
         std::string next_event_name = event_names[matched_event.size()];
-        size_t row_count_idx = row_count_indices[matched_event.size()];
         sqlite3_stmt * filter_stmt = filter_stmts[matched_event.size() - 1];
 
         auto bind_start = std::chrono::high_resolution_clock::now();
@@ -184,17 +212,16 @@ Vector2D MyFunction(PyObject ** obj_array,
         bind_time += std::chrono::duration_cast<std::chrono::duration<double>>(bind_end - bind_start);
 
         auto start_filter = std::chrono::high_resolution_clock::now();
-        
+        filter_calls++;
         filter_input_total_rows += num_rows;
         std::vector<std::vector<Scalar>> matched = {};
         size_t col_count = sqlite3_column_count(filter_stmt);
         while (sqlite3_step(filter_stmt) == SQLITE_ROW) {
-          filter_calls++;
           filter_output_total_rows++;
           std::vector<Scalar> row = {};
 
           for (int col = 0; col < col_count; col++) {
-            Scalar value = recover_scalar_from_stmt(filter_stmt, col, types[column_names[matched_event.size()][col]]);
+            Scalar value = recover_scalar_from_stmt(filter_stmt, col, types[col]);
             row.push_back(value);
           }
           matched.push_back(std::move(row));
@@ -215,7 +242,7 @@ Vector2D MyFunction(PyObject ** obj_array,
             //print out matched            
             if (next_event_name == event_names[event_names.size() - 1]) {
                 std::vector<size_t> result = matched_event;
-                result.push_back(extract_row_count_from_scalar(matched[0][row_count_indices[row_count_idx]]));
+                result.push_back(extract_row_count_from_scalar(matched[0][row_count_idx]));
                 matched_row_counts.emplace_back(std::move(result));
 
                 auto end_overhead = std::chrono::high_resolution_clock::now();
@@ -227,7 +254,7 @@ Vector2D MyFunction(PyObject ** obj_array,
                     std::vector<Scalar> &row = *it;
                     fate_t new_fate = fate;
                     for (std::string & col: event_fate_columns[next_event_name]) {
-                        new_fate[next_event_name + "_" + col] = row[column_name_to_pos[matched_event.size()][col]];
+                        new_fate[next_event_name + "_" + col] = row[column_name_to_pos[col]];
                     }
                     std::vector<size_t> new_matched_event = matched_event;
                     new_matched_event.push_back(extract_row_count_from_scalar(row[row_count_idx]));
@@ -255,8 +282,8 @@ Vector2D MyFunction(PyObject ** obj_array,
   auto end_time = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = end_time - start_time;
 
-//   sql = "delete from frame";
-//   SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
+  sql = "delete from frame";
+  SQLITE_EXEC_AND_CHECK(db, sql, err_msg);
   std::cout << "Number of intervals " << start_end.size() << std::endl;
   std::cout << "Filter total calls " << filter_calls << std::endl;
   std::cout << "Filter input total rows " << filter_input_total_rows << std::endl;

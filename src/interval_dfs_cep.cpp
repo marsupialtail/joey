@@ -149,27 +149,64 @@ Vector2D MyFunction(PyObject ** obj_array,
         fate[event_names[0] + "_" + col] = transposed_batch[start - start_row_count][column_name_to_pos[0][col]];
     }
 
-    std::vector<size_t> first_matched_event = {start};
-    std::deque<std::tuple<size_t, fate_t, std::vector<size_t>>> stack = {
-        std::make_tuple(0, fate, first_matched_event)};
+    for (int i = 0; i < event_names.size() - 1; i++) {
+        SQLITE_CLEAR_AND_CHECK(db, filter_stmts[i]);
+        SQLITE_RESET_AND_CHECK(db, filter_stmts[i]);
+    }
 
-    auto start_deque = std::chrono::high_resolution_clock::now();
+    sqlite3_stmt * filter_stmt = filter_stmts[0];
+    std::string next_event_name = event_names[1];
+    size_t row_count_idx = row_count_indices[1];
+
+   
+    for (int i = 0; i < event_bind_columns[next_event_name].size(); i ++)
+    {
+        std::string col = event_bind_columns[next_event_name].at(i);
+        // print out fate
+        Scalar value = fate.at(col);
+        bind_scalar_to_stmt(filter_stmt, i + 1, value);
+    }
+    sqlite3_bind_int64(filter_stmt, event_bind_columns[next_event_name].size() + 1, (long)(start));
+    sqlite3_bind_int64(filter_stmt, event_bind_columns[next_event_name].size() + 2, (long)(end));
+
+    std::deque<size_t> stack = {};
+
+    auto start_filter = std::chrono::high_resolution_clock::now();
+    auto sqlite_result = sqlite3_step(filter_stmt);
+    auto end_filter = std::chrono::high_resolution_clock::now();
+    filter_time += (end_filter - start_filter);
+    filter_calls ++;
+
+    if (sqlite_result == SQLITE_ROW ) {
+
+        std::vector<Scalar> row = {};
+        size_t col_count = sqlite3_column_count(filter_stmt);
+        for (int col = 0; col < col_count; col++) {
+            Scalar value = recover_scalar_from_stmt(filter_stmt, col, types[column_names[1][col]]);
+            row.push_back(value);
+        }
+        for (std::string & col: event_fate_columns[next_event_name]) {
+            fate[next_event_name + "_" + col] = row[column_name_to_pos[1][col]];
+        }
+
+        stack.push_back(extract_row_count_from_scalar(row[row_count_idx]) - start);
+
+    } else {
+        SQLITE_CLEAR_AND_CHECK(db, filter_stmt);
+        SQLITE_RESET_AND_CHECK(db, filter_stmt);
+        continue;
+    }
 
     while (stack.size() > 0) {
+        // print out the stack
 
-        std::tuple<size_t, fate_t, std::vector<size_t>> state = std::move(stack.back());
-        stack.pop_back();
-        
-        size_t marker = std::get<0>(state);
-        fate_t & fate = std::get<1>(state);
-        std::vector<size_t> & matched_event = std::get<2>(state);
+        size_t marker = stack.back();
 
-        std::string next_event_name = event_names[matched_event.size()];
-        size_t row_count_idx = row_count_indices[matched_event.size()];
-        sqlite3_stmt * filter_stmt = filter_stmts[matched_event.size() - 1];
+        std::string next_event_name = event_names[stack.size() + 1];
+        size_t row_count_idx = row_count_indices[stack.size() + 1];
+        filter_stmt = filter_stmts[stack.size()];
 
-        auto bind_start = std::chrono::high_resolution_clock::now();
-
+        SQLITE_CLEAR_AND_CHECK(db, filter_stmt);
         for (int i = 0; i < event_bind_columns[next_event_name].size(); i ++)
         {
             std::string col = event_bind_columns[next_event_name].at(i);
@@ -179,76 +216,95 @@ Vector2D MyFunction(PyObject ** obj_array,
         }
         sqlite3_bind_int64(filter_stmt, event_bind_columns[next_event_name].size() + 1, (long)(start + marker));
         sqlite3_bind_int64(filter_stmt, event_bind_columns[next_event_name].size() + 2, (long)(end));
-
-        auto bind_end = std::chrono::high_resolution_clock::now();
-        bind_time += std::chrono::duration_cast<std::chrono::duration<double>>(bind_end - bind_start);
-
-        auto start_filter = std::chrono::high_resolution_clock::now();
         
-        filter_input_total_rows += num_rows;
-        std::vector<std::vector<Scalar>> matched = {};
-        size_t col_count = sqlite3_column_count(filter_stmt);
-        while (sqlite3_step(filter_stmt) == SQLITE_ROW) {
-          filter_calls++;
-          filter_output_total_rows++;
-          std::vector<Scalar> row = {};
+        start_filter = std::chrono::high_resolution_clock::now();
+        sqlite_result = sqlite3_step(filter_stmt);
+        end_filter = std::chrono::high_resolution_clock::now();
+        filter_time += (end_filter - start_filter);
+        filter_calls ++;
 
-          for (int col = 0; col < col_count; col++) {
-            Scalar value = recover_scalar_from_stmt(filter_stmt, col, types[column_names[matched_event.size()][col]]);
-            row.push_back(value);
-          }
-          matched.push_back(std::move(row));
-          if (next_event_name == event_names[event_names.size() - 1]) {
-            break;
-          }
-        }
+        if (sqlite_result == SQLITE_ROW ) {
 
-        SQLITE_CLEAR_AND_CHECK(db, filter_stmt);
-        SQLITE_RESET_AND_CHECK(db, filter_stmt);
-        
-        auto end_filter = std::chrono::high_resolution_clock::now();
-        filter_time += std::chrono::duration_cast<std::chrono::duration<double>>(end_filter - start_filter);
-
-        auto start_overhead = std::chrono::high_resolution_clock::now();
-
-        if (matched.size() > 0) {
-            //print out matched            
-            if (next_event_name == event_names[event_names.size() - 1]) {
-                std::vector<size_t> result = matched_event;
-                result.push_back(extract_row_count_from_scalar(matched[0][row_count_indices[row_count_idx]]));
-                matched_row_counts.emplace_back(std::move(result));
-
-                auto end_overhead = std::chrono::high_resolution_clock::now();
-                overhead += std::chrono::duration_cast<std::chrono::duration<double>>(end_overhead - start_overhead);
-
-                break;
-            } else {
-                for (auto it = matched.rbegin(); it != matched.rend(); ++it) {
-                    std::vector<Scalar> &row = *it;
-                    fate_t new_fate = fate;
-                    for (std::string & col: event_fate_columns[next_event_name]) {
-                        new_fate[next_event_name + "_" + col] = row[column_name_to_pos[matched_event.size()][col]];
-                    }
-                    std::vector<size_t> new_matched_event = matched_event;
-                    new_matched_event.push_back(extract_row_count_from_scalar(row[row_count_idx]));
-                    stack.emplace_back(
-                        extract_row_count_from_scalar(row[row_count_idx]) - start, 
-                        std::move(new_fate), 
-                        std::move(new_matched_event)
-                    );
-                }
-                
+            std::vector<Scalar> row = {};
+            size_t col_count = sqlite3_column_count(filter_stmt);
+            for (int col = 0; col < col_count; col++) {
+                Scalar value = recover_scalar_from_stmt(filter_stmt, col, types[column_names[stack.size() + 1][col]]);
+                row.push_back(value);
             }
-        }
 
-        auto end_overhead = std::chrono::high_resolution_clock::now();
-        overhead += std::chrono::duration_cast<std::chrono::duration<double>>(end_overhead - start_overhead);
+            if (next_event_name == event_names[event_names.size() - 1]) {
+                std::vector<size_t> result = {start};
+                for (size_t element : stack) {
+                    result.push_back(element + start);
+                }
+                result.push_back(extract_row_count_from_scalar(row[row_count_idx]));
+                matched_row_counts.emplace_back(std::move(result));
+                break;
+                
+            } else {
+                for (std::string & col: event_fate_columns[next_event_name]) {
+                    fate[next_event_name + "_" + col] = row[column_name_to_pos[stack.size() + 1][col]];
+                }
+                stack.push_back(extract_row_count_from_scalar(row[row_count_idx]) - start);
+            }
+            
+        } else {
+
+            SQLITE_RESET_AND_CHECK(db, filter_stmt);
+            stack.pop_back();
+            filter_stmt = filter_stmts[stack.size()];
+            std::string this_event_name = event_names[stack.size() + 1];
+            SQLITE_CLEAR_AND_CHECK(db, filter_stmt);
+            for (int i = 0; i < event_bind_columns[this_event_name].size(); i ++)
+            {
+                std::string col = event_bind_columns[this_event_name].at(i);
+                // print out fate
+                Scalar value = fate.at(col);
+                bind_scalar_to_stmt(filter_stmt, i + 1, value);
+            }
+            if (stack.size() > 0) {
+                sqlite3_bind_int64(filter_stmt, event_bind_columns[this_event_name].size() + 1, (long)(start + stack.back()));
+            } else {
+                sqlite3_bind_int64(filter_stmt, event_bind_columns[this_event_name].size() + 1, (long)(start));
+            }
+                
+            sqlite3_bind_int64(filter_stmt, event_bind_columns[this_event_name].size() + 2, (long)(end));
+
+            start_filter = std::chrono::high_resolution_clock::now();
+            sqlite_result = sqlite3_step(filter_stmt);
+            end_filter = std::chrono::high_resolution_clock::now();
+            filter_time += (end_filter - start_filter);
+            filter_calls ++;
+
+            if (sqlite_result == SQLITE_ROW ) {
+
+                std::vector<Scalar> row = {};
+                size_t col_count = sqlite3_column_count(filter_stmt);
+                for (int col = 0; col < col_count; col++) {
+                    Scalar value = recover_scalar_from_stmt(filter_stmt, col, types[column_names[1][col]]);
+                    row.push_back(value);
+                }
+                for (std::string & col: event_fate_columns[this_event_name]) {
+                    fate[this_event_name + "_" + col] = row[column_name_to_pos[1][col]];
+                }
+
+                stack.push_back(extract_row_count_from_scalar(row[row_count_idx]) - start);
+
+            } else {
+                continue;
+            }
+        
+        }
+        
+
+        // auto end_overhead = std::chrono::high_resolution_clock::now();
+        // overhead += std::chrono::duration_cast<std::chrono::duration<double>>(end_overhead - start_overhead);
 
 
     }
 
-    auto end_deque = std::chrono::high_resolution_clock::now();
-    deque_time += std::chrono::duration_cast<std::chrono::duration<double>>(end_deque - start_deque);
+    // auto end_deque = std::chrono::high_resolution_clock::now();
+    // deque_time += std::chrono::duration_cast<std::chrono::duration<double>>(end_deque - start_deque);
     
   }
 
