@@ -5,7 +5,21 @@ from ctypes import *
 import ctypes
 import pyarrow as pa
 import re
+import sysconfig
 
+def load_library(lib_name):
+    # Get the extension for dynamic libraries
+    ext = sysconfig.get_config_var('EXT_SUFFIX') or sysconfig.get_config_var('SO')
+
+    # Construct the library name based on the platform naming conventions
+    # Adjust the formatting as per your library naming convention
+    formatted_lib_name = f"{lib_name}{ext}"
+
+    # Construct the path to the library relative to the current file
+    lib_path = os.path.join(os.path.dirname(__file__), formatted_lib_name)
+
+    # Load the library
+    return PyDLL(lib_path)
 
 class StringList(ctypes.Structure):
     _fields_ = [("items", ctypes.POINTER(ctypes.c_char_p)), ("length", ctypes.c_int)]
@@ -130,9 +144,9 @@ def _interval_cep_c(
     # assert event_indices[event_names[0]] != None, "this is for things with first event filter"
     
     if method == "vector":
-        lib = PyDLL('src/interval_vector.so')
+        lib = load_library('interval_vector')
     elif method == "dfs":
-        lib = PyDLL('src/interval_dfs.so')
+        lib = load_library('interval_dfs')
     else:
         raise NotImplementedError
 

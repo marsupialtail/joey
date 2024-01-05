@@ -13,7 +13,7 @@ version = "0.2.3"
 authors = [{ name = "Tony Wang", email = "zihengw@stanford.edu" }]
 description = "Event analytics. Very fast. Will eventually be merged into Quokka"
 readme = "README.md"
-requires-python = ">=3.6"
+requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
