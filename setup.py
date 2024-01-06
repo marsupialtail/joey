@@ -1,4 +1,4 @@
-import os, sys
+import os, re, sys
 from setuptools import setup, find_packages, Extension
 import distutils.sysconfig as sysconfig
 import pyarrow
@@ -14,10 +14,26 @@ PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
 
 # Compiler and linker flags
 extra_compile_args = ['-O3', '-g', '-fPIC', '-std=c++17', f'-I{ARROW_PATH}/include/', f'-I{PYTHON_INCLUDE_DIR}']
-extra_link_args = [f'-L{PYTHON_LIB_DIR}', '-Wl,-rpath,' + PYTHON_LIB_DIR]
-# extra_link_args += ['-l:libarrow.so.1400', '-l:libarrow_python.so', '-lsqlite3']
-extra_link_args += ['-l:libarrow.so.1400', '-larrow_python', '-lsqlite3']
-# extra_link_args += ['-l:libarrow.so.1400', '-lsqlite3']
+extra_link_args = [f'-L{PYTHON_LIB_DIR}', '-L{ARROW_PATH}', '-Wl,-rpath,' + PYTHON_LIB_DIR]
+extra_link_args += ['-larrow', '-larrow_python', '-lsqlite3']
+
+# Pyarrow distributions contain the shared libraries that we want to link with.  However, they are not named
+# consistently.  Some libraries are named .(so|dylib) and some are named .1400.(so|dylib) where 1400 is the
+# version number.  In order to link to these latter files we need to create symlinks named .(so|dylib).
+for file in os.listdir(ARROW_PATH):
+    if re.search("\\.\\d\\d\\d\\d\\.dylib", file):
+        short_name = file[:-11] + ".dylib"
+    elif re.search("\\.\\d\\d\\d\\d\\.so", file):
+        short_name = file[:-8] + ".so"
+    else:
+        short_name = None
+    if short_name:
+        print(f"Creating symlink from {ARROW_PATH}/{file} TO {ARROW_PATH}/{short_name}")
+        if not os.path.exists(f"{ARROW_PATH}/{short_name}"):
+            print(f"Skipping symlink from {ARROW_PATH}/{file} because f{ARROW_PATH}/{short_name} exists")
+            os.symlink(f"{ARROW_PATH}/{file}", f"{ARROW_PATH}/{short_name}")
+    else:
+        print(f"Ignoring {file}")
 
 # Define the extension modules
 extensions = [
