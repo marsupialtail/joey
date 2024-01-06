@@ -16,7 +16,7 @@ PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
 extra_compile_args = ['-O3', '-g', '-fPIC', '-std=c++17', f'-I{ARROW_PATH}/include/', f'-I{PYTHON_INCLUDE_DIR}']
 extra_link_args = [f'-L{PYTHON_LIB_DIR}', '-Wl,-rpath,' + PYTHON_LIB_DIR]
 # extra_link_args += ['-l:libarrow.so.1400', '-l:libarrow_python.so', '-lsqlite3']
-extra_link_args += ['-larrow', '-larrow_python', '-lsqlite3']
+extra_link_args += ['-l:libarrow.so.1400', '-larrow_python', '-lsqlite3']
 # extra_link_args += ['-l:libarrow.so.1400', '-lsqlite3']
 
 # Define the extension modules
