@@ -23,7 +23,7 @@ extra_link_args += ['-larrow', '-larrow_python', '-lsqlite3']
 for file in os.listdir(ARROW_PATH):
     if re.search("\\.\\d\\d\\d\\d\\.dylib", file):
         short_name = file[:-11] + ".dylib"
-    elif re.search("\\.\\d\\d\\d\\d\\.so", file):
+    elif re.search("\\.so.\\d\\d\\d\\d", file):
         short_name = file[:-8] + ".so"
     else:
         short_name = None
