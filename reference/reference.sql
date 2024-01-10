@@ -34,6 +34,18 @@ select count(*) from qqq match_recognize(
     F as (close > D.close * 1.0025 and timestamp - A.timestamp <= 10800)
 );
 
+select count(*) from qqq match_recognize(
+    order by timestamp
+    measures A.timestamp as A_ID, B.timestamp as B_ID, C.timestamp as C_ID
+    one row per match
+    after match skip to next row
+    pattern (A Z* B Z* C)
+    define A as is_local_bottom, 
+    Z as (timestamp - A.timestamp <= 10800),
+    B as (close > A.close * 1.0025 and timestamp - A.timestamp <= 10800),
+    C as (close < B.close * 0.9975 and timestamp - A.timestamp <= 10800)
+);
+
 
 WITH input_bucketized AS (
     SELECT *, cast(timestamp / (10800) AS bigint) AS bk

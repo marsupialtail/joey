@@ -27,11 +27,10 @@ jobs:
         env:
           CIBW_ARCHS: "auto64"
           MACOSX_DEPLOYMENT_TARGET: "10.14"
-          CIBW_BUILD: "cp38-manylinux* cp39-manylinux* cp310-manylinux* cp311-manylinux*"
+          CIBW_BUILD: "cp38* cp39* cp310* cp311*"
+          CIBW_SKIP: "*musllinux*"
           CIBW_REPAIR_WHEEL_COMMAND: >
-            pip3 install pyarrow &&
-            export LD_LIBRARY_PATH=$(python -c 'import pyarrow; print(pyarrow.__path__[0])') &&
-            auditwheel repair -w {dest_dir} {wheel}
+            ./repair.sh
       - uses: actions/upload-artifact@v4
         with:
           name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
